@@ -51,3 +51,8 @@ credentials.json
 
 # Optional local HDT plugin (not required for main app)
 hdt_plugin/
+HDT_Plugin_Code.cs
+
+# Local window-topmost helpers (not required for main app)
+keep_window_topmost.ps1
+window_always_on_top.ahk

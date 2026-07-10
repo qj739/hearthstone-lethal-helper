@@ -26,7 +26,7 @@
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/<your-username>/hearthstone-lethal-helper.git
+git clone https://github.com/qj739/hearthstone-lethal-helper.git
 cd hearthstone-lethal-helper
 
 # 2. 启动主程序（首次运行会自动安装 log.config）
@@ -120,7 +120,7 @@ HS/
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/<your-username>/hearthstone-lethal-helper.git
+git clone https://github.com/qj739/hearthstone-lethal-helper.git
 cd hearthstone-lethal-helper
 
 # 2. Run the tracker (installs log.config on first launch)

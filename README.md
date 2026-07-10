@@ -2,6 +2,8 @@
 
 [中文](#中文) | [English](#english)
 
+**📥 [下载 Windows 版 EXE](https://github.com/qj739/hearthstone-lethal-helper/releases/download/v1.0.0/HS-Lethal-Helper.exe)** · **🎬 [观看功能演示视频](https://github.com/qj739/hearthstone-lethal-helper/raw/main/assets/demo/arena-lethal-demo.mp4)**
+
 ---
 
 ## 中文
@@ -21,6 +23,15 @@
 - 可用 `Power.log` 回放验证，便于回归测试与排错
 
 > 本项目为个人学习与研究用途，与暴雪娱乐无关，也不保证覆盖全部卡牌机制。
+
+### 下载与演示
+
+| | |
+|---|---|
+| **Windows 免安装版** | [HS-Lethal-Helper.exe](https://github.com/qj739/hearthstone-lethal-helper/releases/download/v1.0.0/HS-Lethal-Helper.exe)（解压即用，首次运行后重启炉石） |
+| **功能演示视频** | [arena-lethal-demo.mp4](https://github.com/qj739/hearthstone-lethal-helper/raw/main/assets/demo/arena-lethal-demo.mp4) |
+
+EXE 设置界面：`HS-Lethal-Helper.exe --settings`
 
 ### 快速开始
 
@@ -115,6 +126,15 @@ HS/
 - Replay validation via `Power.log` for regression testing and debugging
 
 > For personal learning and research only. Not affiliated with Blizzard Entertainment. Not all card mechanics are guaranteed to be covered.
+
+### Download & Demo
+
+| | |
+|---|---|
+| **Windows build** | [HS-Lethal-Helper.exe](https://github.com/qj739/hearthstone-lethal-helper/releases/download/v1.0.0/HS-Lethal-Helper.exe) (no install; restart Hearthstone after first run) |
+| **Demo video** | [arena-lethal-demo.mp4](https://github.com/qj739/hearthstone-lethal-helper/raw/main/assets/demo/arena-lethal-demo.mp4) |
+
+Overlay settings: `HS-Lethal-Helper.exe --settings`
 
 ### Quick Start
 

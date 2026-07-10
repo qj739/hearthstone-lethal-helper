@@ -4,7 +4,7 @@ import io
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from hdt_python.power_parser import GameState, PowerLogParser
 from hdt_python.lethal_checker import LethalChecker

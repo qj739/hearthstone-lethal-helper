@@ -12,12 +12,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from hdt_python.power_parser import PowerLogParser, GameState
 from hdt_python.lethal_checker import LethalChecker
 
-LOGS_ROOT = Path(__file__).parent / "Logs"
+LOGS_ROOT = Path(__file__).resolve().parent.parent / "Logs"
 SPLIT_ROOT = LOGS_ROOT / "split_games"
 
 _CREATE_GAME_RE = re.compile(r"GameState\.DebugPrintPower\(\) - CREATE_GAME")
@@ -367,7 +367,7 @@ def main() -> int:
     game_files = discover_split_games()
     if not game_files:
         print(f"未找到拆分对局: {SPLIT_ROOT}")
-        print("请先运行: python verify_all_power_logs.py --split")
+        print("请先运行: python tools/verify_all_power_logs.py --split")
         return 1
 
     total = len(game_files)

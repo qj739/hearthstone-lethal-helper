@@ -3,8 +3,8 @@
 纯 Python 导出场面 JSON（读 Power.log，与 HDT 同源，无需编译 C# 插件）。
 
 用法:
-  python export_board.py
-  python export_board.py -o board_state.json --interval 0.5
+  python tools/export_board.py
+  python tools/export_board.py -o board_state.json --interval 0.5
 
 输出字段与 hdt_plugin 的 hdt_state.json 结构对齐，便于对比或其它脚本读取。
 """
@@ -19,7 +19,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from hdt_python.log_watcher import LogWatcherManager, find_power_log_path, install_log_config
 from hdt_python.power_parser import PowerLogParser, GameState
@@ -31,7 +31,7 @@ def _default_output_path() -> Path:
     local = os.environ.get("LOCALAPPDATA", "")
     if local:
         return Path(local) / "HSCompare" / "power_log_state.json"
-    return Path(__file__).parent / "power_log_state.json"
+    return Path(__file__).resolve().parent.parent / "power_log_state.json"
 
 
 def main() -> int:

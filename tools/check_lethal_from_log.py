@@ -3,13 +3,13 @@
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from hdt_python.power_parser import PowerLogParser, GameState
 from hdt_python.lethal_checker import LethalChecker
 from hdt_python.board_damage import entity_has_taunt, collect_hand_charge_minions
 
-LOG = Path(__file__).parent / "Power.log"
+LOG = Path(__file__).resolve().parent.parent / "Power.log"
 
 
 def parse_to(lines, start: int, end_line: int) -> GameState:

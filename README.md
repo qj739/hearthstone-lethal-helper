@@ -69,7 +69,8 @@ HS/
 ├── hdt_python/             # 核心逻辑
 ├── docs/                   # 文档与竞技场清单
 ├── tests/                  # 回归测试
-├── scripts/                # 工具脚本
+├── tools/                  # 日志分析 / 调试脚本
+├── scripts/                # 卡牌清单生成等工具
 └── json/                   # 卡牌数据
 ```
 
@@ -172,7 +173,8 @@ HS/
 ├── hdt_python/             # Core logic
 ├── docs/                   # Documentation & Arena worklists
 ├── tests/                  # Regression tests
-├── scripts/                # Utility scripts
+├── tools/                  # Log analysis & debug scripts
+├── scripts/                # Card-list generators, etc.
 └── json/                   # Card data
 ```
 

@@ -287,4 +287,4 @@ if __name__ == "__main__":
     print("1. 编译 HDT_Plugin_Code.cs 为 DLL")
     print("2. 将 DLL 放到 HDT 的 Plugins 文件夹")
     print("3. 启动 HDT 和炉石传说")
-    print("4. 运行此 Python 脚本: python hdt_integration.py")
+    print("4. 运行此 Python 脚本: python tools/hdt_integration.py")

@@ -5,7 +5,7 @@
 用法:
   1. 编译并启用 HDT 插件（见 HDT_Plugin_Code.cs / hdt_plugin/README.md）
   2. 同时打开 HDT + 炉石
-  3. 本终端: python compare_hdt.py
+  3. 本终端: python tools/compare_hdt.py
   4. 另一终端可继续跑 python hdt_tracker.py
 
 差异会打印到控制台，便于逐项修复 power_parser / board_damage。
@@ -19,7 +19,7 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from hdt_python.log_watcher import LogWatcherManager, find_power_log_path, install_log_config
 from hdt_python.power_parser import PowerLogParser, GameState

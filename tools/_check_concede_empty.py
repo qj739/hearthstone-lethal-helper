@@ -6,7 +6,7 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from analyze_user_logs_lethal import (
     is_local_winner,
@@ -18,7 +18,7 @@ from analyze_user_logs_lethal import (
 
 LOG_DIR = Path(r"c:\Users\hp\Desktop\LOGS(1)\LOGS\split_games\Hearthstone_2026_06_15_20_33_51")
 CARDS = json.loads(
-    (Path(__file__).parent / "json" / "cards_zhCN.json").read_text(encoding="utf-8")
+    (Path(__file__).resolve().parent.parent / "json" / "cards_zhCN.json").read_text(encoding="utf-8")
 )
 NAMES = {c["id"]: c.get("name", c["id"]) for c in CARDS if c.get("id")}
 

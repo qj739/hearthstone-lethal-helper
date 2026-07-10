@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from analyze_user_logs_lethal import analyze_split_file
 
 roots = [
-    Path(__file__).parent / "Logs" / "split_games",
+    Path(__file__).resolve().parent.parent / "Logs" / "split_games",
     Path(r"C:\Users\hp\Desktop\LOGS(1)\LOGS\split_games"),
 ]
 seen = set()

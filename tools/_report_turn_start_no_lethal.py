@@ -6,7 +6,7 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from analyze_user_logs_lethal import (
     analyze_split_file,
@@ -20,7 +20,7 @@ from hdt_python.lethal_checker import LethalChecker
 
 SPLIT_ROOT = Path(r"C:\Users\hp\Desktop\HS\Logs\split_games")
 CARDS = json.loads(
-    (Path(__file__).parent / "json" / "cards_zhCN.json").read_text(encoding="utf-8")
+    (Path(__file__).resolve().parent.parent / "json" / "cards_zhCN.json").read_text(encoding="utf-8")
 )
 NAMES = {c["id"]: c.get("name", c["id"]) for c in CARDS if c.get("id")}
 

@@ -62,7 +62,7 @@ HS/
 ├── hdt_python/                 # 核心模块
 ├── docs/                       # 文档（本文档位于 docs/）
 ├── tests/                      # 回归测试
-├── card_database.py            # 卡牌数据库（可扩展）
+├── tools/                      # 日志分析 / 调试脚本
 └── json/                       # 卡牌数据
 ```
 

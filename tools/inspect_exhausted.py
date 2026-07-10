@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from hdt_python.power_parser import PowerLogParser, GameState
 from hdt_python.board_damage import (
     is_exhausted, _num_turns_in_play, _minion_summoned_this_turn, attacks_this_turn,

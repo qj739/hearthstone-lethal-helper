@@ -8,7 +8,7 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from analyze_user_logs_lethal import (
     analyze_split_file,
@@ -23,7 +23,7 @@ from verify_all_power_logs import discover_split_games, local_battletag
 from hdt_python.board_damage import entity_has_taunt
 from hdt_python.lethal_checker import LethalChecker
 
-CARDS_ZH = Path(__file__).parent / "json" / "cards_zhCN.json"
+CARDS_ZH = Path(__file__).resolve().parent.parent / "json" / "cards_zhCN.json"
 
 
 def load_card_names() -> dict:
@@ -112,7 +112,7 @@ def main() -> int:
     )
     args = ap.parse_args()
     roots = [Path(p) for p in args.split_root] if args.split_root else [
-        Path(__file__).parent / "Logs" / "split_games",
+        Path(__file__).resolve().parent.parent / "Logs" / "split_games",
         Path(r"C:\Users\hp\Desktop\LOGS(1)\LOGS\split_games"),
     ]
     files = []

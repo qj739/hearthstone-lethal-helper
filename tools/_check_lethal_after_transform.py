@@ -2,7 +2,7 @@
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from _report_turn_start_no_lethal import snapshot_at, engine_play_line
 
 path = Path(r"C:\Users\hp\Desktop\HS\Logs\split_games\Hearthstone_2026_06_16_23_48_03\game_01.log")

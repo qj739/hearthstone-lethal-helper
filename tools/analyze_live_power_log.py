@@ -5,7 +5,7 @@ import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from hdt_python.log_watcher import find_power_log_path, _registry_install_dirs, _power_log_candidates
 from hdt_python.player_identity import format_identity_summary

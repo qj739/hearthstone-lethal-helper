@@ -87,7 +87,7 @@ def main() -> None:
             _effect(defn, card_text),
         ))
 
-    out = ROOT / "SPELL_SIM_TIER_TABLE.md"
+    out = ROOT / "docs" / "SPELL_SIM_TIER_TABLE.md"
     lines = [
         "# 法术模拟分层对照表",
         "",

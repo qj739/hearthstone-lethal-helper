@@ -18,6 +18,8 @@ env/
 # IDE / editor
 .vscode/
 .idea/
+.claude/
+.sixth/
 *.swp
 *.swo
 
@@ -29,6 +31,7 @@ Desktop.ini
 # Project caches & temp
 .cache/
 scripts/.cache/
+exports/chat_last_3_days/
 _tmp_*
 *.log
 Logs/

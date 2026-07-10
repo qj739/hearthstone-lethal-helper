@@ -14,7 +14,8 @@ from .deathrattle import DeathrattleDef, DrKind
 from .end_turn_board import EndTurnDef, EtKind
 
 ROOT = Path(__file__).resolve().parents[1]
-GAP_REPORT = ROOT / "ARENA_GAP_REPORT.md"
+DOCS = ROOT / "docs"
+GAP_REPORT = DOCS / "ARENA_GAP_REPORT.md"
 
 _REGISTERED_LOG: List[Tuple[str, str, str, str]] = []  # category, cid, name, impl
 _BULK_DONE = False
@@ -809,7 +810,7 @@ def register_arena_season_gap() -> List[Tuple[str, str, str, str]]:
 
 def write_new_cards_md(path: Optional[Path] = None) -> Path:
     """将本次登记写入 ARENA_NEW_CARDS_ADDED.md。"""
-    out = path or (ROOT / "ARENA_NEW_CARDS_ADDED.md")
+    out = path or (DOCS / "ARENA_NEW_CARDS_ADDED.md")
     log = _REGISTERED_LOG or register_arena_season_gap()
     by_cat: Dict[str, List[Tuple[str, str, str]]] = {}
     for cat, cid, name, impl in log:

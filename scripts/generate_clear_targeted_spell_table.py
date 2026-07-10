@@ -217,7 +217,7 @@ def main() -> None:
                 _effect(defn, card_text),
             ))
 
-    out = ROOT / "CLEAR_TARGETED_SPELL_TABLE.md"
+    out = ROOT / "docs" / "CLEAR_TARGETED_SPELL_TABLE.md"
     lines = [
         "# 清场指向性 / 指向性可打脸法术对照表",
         "",

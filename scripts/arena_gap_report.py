@@ -16,7 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
 CACHE = Path(__file__).resolve().parent / ".cache"
 CARDS_JSON = ROOT / "json" / "cards.json"
 CARDS_ZH = ROOT / "json" / "cards_zhCN.json"
-OUT_MD = ROOT / "ARENA_GAP_REPORT.md"
+DOCS = ROOT / "docs"
+OUT_MD = DOCS / "ARENA_GAP_REPORT.md"
 API_URL = (
     "https://hsreplay.net/api/v1/arena/card_stats/free/"
     "?ArenaTimestampRangeFilter=LAST_4_DAYS"

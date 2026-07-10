@@ -5,7 +5,7 @@ echo ========================================
 echo.
 
 echo [1/4] 测试基础功能...
-python test_hdt.py
+python tests/test_hdt.py
 if %errorlevel% neq 0 (
     echo 基础测试失败！
     pause
@@ -14,7 +14,7 @@ if %errorlevel% neq 0 (
 
 echo.
 echo [2/4] 测试嘲讽逻辑...
-python test_taunt.py
+python tests/test_taunt.py
 if %errorlevel% neq 0 (
     echo 嘲讽测试失败！
     pause
@@ -23,7 +23,7 @@ if %errorlevel% neq 0 (
 
 echo.
 echo [3/4] 测试最优解算法...
-python test_optimal_taunt.py
+python tests/test_optimal_taunt.py
 if %errorlevel% neq 0 (
     echo 最优解测试失败！
     pause

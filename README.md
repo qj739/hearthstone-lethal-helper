@@ -1,5 +1,7 @@
 # HS Lethal Helper / 炉石斩杀助手
 
+## **这是竞技场模式专用，用于斩杀计算和提示，让你永不错斩！**
+
 [中文](#中文) | [English](#english)
 
 **📥 [下载 Windows 版 EXE](https://github.com/qj739/hearthstone-lethal-helper/releases/download/v1.0.0/HS-Lethal-Helper.exe)** · **🎬 [观看功能演示视频](https://github.com/qj739/hearthstone-lethal-helper/raw/main/assets/demo/arena-lethal-demo.mp4)**
@@ -10,7 +12,7 @@
 
 ### 简介
 
-> **这是竞技场模式专用，用于斩杀计算和提示，让你永不错斩！**
+> ## **这是竞技场模式专用，用于斩杀计算和提示，让你永不错斩！**
 
 **HS Lethal Helper** 是一款基于 **Power.log 日志解析** 的《炉石传说》**竞技场**辅助工具，思路与 [Hearthstone Deck Tracker (HDT)](https://github.com/HearthSim/Hearthstone-Deck-Tracker) 类似：不读取游戏内存，只监听官方日志，安全、轻量、易于维护。
 
@@ -113,7 +115,7 @@ HS/
 
 ### Overview
 
-> **Built for Arena mode — lethal calculation and hints so you never miss lethal!**
+> ## **Built for Arena mode — lethal calculation and hints so you never miss lethal!**
 
 **HS Lethal Helper** is an **Arena-focused** *Hearthstone* assistant built on **Power.log parsing**, following the same approach as [Hearthstone Deck Tracker (HDT)](https://github.com/HearthSim/Hearthstone-Deck-Tracker): it does not read game memory, only official log files—keeping things safe, lightweight, and maintainable.
 

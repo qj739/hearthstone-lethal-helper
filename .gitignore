@@ -48,3 +48,6 @@ overlay_settings.json
 .env
 *.token
 credentials.json
+
+# Optional local HDT plugin (not required for main app)
+hdt_plugin/

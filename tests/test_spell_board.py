@@ -1240,7 +1240,7 @@ def test_p0_blood_in_the_water_shark_clears_taunt():
 
 
 def test_p0_blood_in_the_water_shark_no_face_empty_board():
-    """血染大海：空场仅 3 直伤，5/5 突袭当回合不计入场攻。"""
+    """血染大海：空场 3 直伤 + 5/5 突袭可打脸（对手无随从时突袭规则）。"""
     gs = GameState()
     gs.local_player_id = 1
     gs.opponent_player_id = 2
@@ -1252,9 +1252,9 @@ def test_p0_blood_in_the_water_shark_no_face_empty_board():
     checker = LethalChecker(gs)
     total = checker.overlay_board_face_damage()
     _, board, weapon, spell, hp = checker.overlay_board_breakdown()
-    assert board == 0
+    assert board == 5
     assert spell == 3
-    assert total == 3
+    assert total == 8
     print("OK p0 blood in the water face only", total)
 
 

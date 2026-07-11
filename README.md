@@ -33,7 +33,7 @@
 | **Windows 免安装版** | [HS-Lethal-Helper.exe](https://github.com/qj739/hearthstone-lethal-helper/releases/download/v1.0.0/HS-Lethal-Helper.exe)（解压即用，首次运行后重启炉石） |
 | **功能演示视频** | [arena-lethal-demo.mp4](https://github.com/qj739/hearthstone-lethal-helper/raw/main/assets/demo/arena-lethal-demo.mp4) |
 
-EXE 设置界面：`HS-Lethal-Helper.exe --settings`
+EXE 浮层顶部菜单栏点击 **「设置」** 即可打开配置面板；右上角 **×** 可隐藏浮层。
 
 ### 快速开始
 
@@ -46,10 +46,9 @@ cd hearthstone-lethal-helper
 
 # 2. 启动主程序（首次运行会自动安装 log.config）
 python hdt_tracker.py
-
-# 3. 打开浮层设置界面（可选）
-python hdt_tracker.py --settings
 ```
+
+浮层顶部 **「设置」** 打开配置；右上角 **×** 隐藏浮层。
 
 首次运行后，若日志未生效，请**重启炉石客户端**一次。
 
@@ -78,8 +77,7 @@ HS/
 
 | 命令 | 说明 |
 |------|------|
-| `python hdt_tracker.py` | 启动追踪与斩杀提示 |
-| `python hdt_tracker.py --settings` | 打开浮层主题/位置设置 |
+| `python hdt_tracker.py` | 启动追踪与斩杀提示（浮层菜单栏可打开设置） |
 | `python tests/test_hdt.py` | 基础功能自检 |
 | `quick_test.bat` | 快速跑核心测试 |
 | `build_exe.bat` | 打包为 Windows 可执行文件 |
@@ -137,7 +135,7 @@ HS/
 | **Windows build** | [HS-Lethal-Helper.exe](https://github.com/qj739/hearthstone-lethal-helper/releases/download/v1.0.0/HS-Lethal-Helper.exe) (no install; restart Hearthstone after first run) |
 | **Demo video** | [arena-lethal-demo.mp4](https://github.com/qj739/hearthstone-lethal-helper/raw/main/assets/demo/arena-lethal-demo.mp4) |
 
-Overlay settings: `HS-Lethal-Helper.exe --settings`
+Open **Settings** from the overlay menu bar; click **×** (top-right) to hide the overlay.
 
 ### Quick Start
 
@@ -150,10 +148,9 @@ cd hearthstone-lethal-helper
 
 # 2. Run the tracker (installs log.config on first launch)
 python hdt_tracker.py
-
-# 3. Open overlay settings (optional)
-python hdt_tracker.py --settings
 ```
+
+Use the overlay menu bar **Settings** to configure; **×** hides the overlay.
 
 After the first run, **restart the Hearthstone client** if logging is not active yet.
 
@@ -182,8 +179,7 @@ HS/
 
 | Command | Description |
 |---------|-------------|
-| `python hdt_tracker.py` | Start tracking and lethal hints |
-| `python hdt_tracker.py --settings` | Overlay theme/position settings |
+| `python hdt_tracker.py` | Start tracking and lethal hints (settings via overlay menu) |
 | `python tests/test_hdt.py` | Basic self-check |
 | `quick_test.bat` | Run core tests quickly |
 | `build_exe.bat` | Build Windows executable |

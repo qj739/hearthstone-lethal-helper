@@ -1636,6 +1636,8 @@ _SPELL_SIM_TIER_OVERRIDES: Dict[str, SpellSimTier] = {
     "DREAM_02": SpellSimTier.CLEAR_BOARD,     # 伊瑟拉苏醒
     "RLK_063": SpellSimTier.CLEAR_BOARD,      # 冰霜巨龙之怒
     "RLK_709": SpellSimTier.CLEAR_BOARD,      # 冷酷严冬
+    "RLK_060": SpellSimTier.CLEAR_AND_FACE,   # 亡者大军：残骸复活突袭食尸鬼
+    "CORE_RLK_060": SpellSimTier.CLEAR_AND_FACE,
     "CORE_CS2_062": SpellSimTier.CLEAR_BOARD, # 地狱烈焰
     "LOOT_417": SpellSimTier.CLEAR_BOARD,     # 大灾变
     "CORE_CS2_093": SpellSimTier.CLEAR_BOARD, # 奉献

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.wintypes as wt
+import math
 import re
 import threading
 import time
@@ -155,12 +156,45 @@ gdi32.CreateCompatibleBitmap.restype = HBITMAP
 gdi32.CreateCompatibleBitmap.argtypes = [HDC, ctypes.c_int, ctypes.c_int]
 gdi32.DeleteDC.argtypes = [HDC]
 gdi32.DeleteObject.argtypes = [HGDIOBJ]
+gdi32.CreatePen.restype = ctypes.c_void_p
+gdi32.CreatePen.argtypes = [ctypes.c_int, ctypes.c_int, DWORD]
+gdi32.Ellipse.restype = BOOL
+gdi32.Ellipse.argtypes = [HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int]
+gdi32.MoveToEx.restype = BOOL
+gdi32.MoveToEx.argtypes = [HDC, ctypes.c_int, ctypes.c_int, ctypes.POINTER(POINT)]
+gdi32.LineTo.restype = BOOL
+gdi32.LineTo.argtypes = [HDC, ctypes.c_int, ctypes.c_int]
+gdi32.Polygon.restype = BOOL
+gdi32.Polygon.argtypes = [HDC, ctypes.POINTER(POINT), ctypes.c_int]
+gdi32.CreateCompatibleDC.restype = HDC
+gdi32.CreateCompatibleDC.argtypes = [HDC]
+gdi32.StretchBlt.restype = BOOL
+gdi32.StretchBlt.argtypes = [
+    HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+    HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, DWORD,
+]
+gdi32.SetStretchBltMode.restype = ctypes.c_int
+gdi32.SetStretchBltMode.argtypes = [HDC, ctypes.c_int]
+gdi32.SetBrushOrgEx.restype = BOOL
+gdi32.SetBrushOrgEx.argtypes = [HDC, ctypes.c_int, ctypes.c_int, ctypes.POINTER(POINT)]
+gdi32.CreateDIBSection.restype = HBITMAP
+gdi32.CreateDIBSection.argtypes = [
+    HDC, ctypes.c_void_p, UINT, ctypes.POINTER(ctypes.c_void_p),
+    ctypes.c_void_p, DWORD,
+]
+gdi32.BitBlt.restype = BOOL
+gdi32.BitBlt.argtypes = [
+    HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+    HDC, ctypes.c_int, ctypes.c_int, DWORD,
+]
 gdi32.GetTextExtentPoint32W.restype = BOOL
 gdi32.GetTextExtentPoint32W.argtypes = [HDC, LPCWSTR, ctypes.c_int, ctypes.POINTER(SIZE)]
 user32.GetDC.restype = HDC
 user32.GetDC.argtypes = [HWND]
 user32.ReleaseDC.restype = ctypes.c_int
 user32.ReleaseDC.argtypes = [HWND, HDC]
+user32.GetCursorPos.restype = BOOL
+user32.GetCursorPos.argtypes = [ctypes.POINTER(POINT)]
 
 kernel32.GetLastError.restype = DWORD
 
@@ -217,6 +251,7 @@ WM_CLOSE           = 0x0010
 WM_DESTROY         = 0x0002
 WM_NCHITTEST       = 0x0084
 WM_SETCURSOR       = 0x0020
+WM_LBUTTONUP       = 0x0202
 WM_ENTERSIZEMOVE   = 0x0231
 WM_EXITSIZEMOVE    = 0x0232
 CS_VREDRAW         = 0x0001
@@ -224,11 +259,16 @@ CS_HREDRAW         = 0x0002
 GWL_EXSTYLE        = -20
 LWA_ALPHA          = 0x00000002
 IDC_ARROW          = 32512
+IDC_HAND           = 32649
 IDC_SIZEALL        = 32646
+HTCLIENT           = 1
 HTCAPTION          = 2
 SW_SHOWNA          = 8
 SW_HIDE            = 0
 SW_RESTORE         = 9
+HALFTONE           = 4
+SRCCOPY            = 0x00CC0020
+_SETTINGS_ICON_SS  = 5  # 超采样倍数，接近 Cursor 矢量清晰度
 
 # 炉石未启动/最小化时，overlay 固定显示在屏幕可见区域（避免贴到 -32000 等不可见坐标）
 _FALLBACK_X = 50
@@ -358,6 +398,13 @@ class Overlay:
         self._show_border = True
         self._show_header = True
         self._header_text = "HS 斩杀助手"
+        self._show_menu_bar = True
+        self._on_settings = None
+        self._on_close = None
+        self._user_closed = False
+        self._settings_btn_rect = (0, 0, 0, 0)
+        self._close_btn_rect = (0, 0, 0, 0)
+        self._menu_bar_rect = (0, 0, 0, 0)
         self._base_theme = self.THEME_DARK
         self._accent_rgb = self._ACCENT_DEFAULT
         self._fonts = self._create_fonts()
@@ -385,6 +432,91 @@ class Overlay:
         self._fonts = self._create_fonts()
         if self.use_layered and self.hwnd:
             self._enable_layered()
+
+    def set_action_callbacks(
+        self,
+        *,
+        on_settings=None,
+        on_close=None,
+    ) -> None:
+        """菜单栏「设置」与右上角关闭按钮回调（在 overlay 消息线程触发）。"""
+        self._on_settings = on_settings
+        self._on_close = on_close
+
+    @property
+    def is_user_closed(self) -> bool:
+        return self._user_closed
+
+    def hide(self) -> None:
+        """隐藏浮层（不退出追踪主程序）。"""
+        self._user_closed = True
+        if self.hwnd:
+            user32.ShowWindow(self.hwnd, SW_HIDE)
+
+    def show(self) -> None:
+        """重新显示被用户关闭的浮层。"""
+        self._user_closed = False
+
+    def _menu_bar_h(self) -> int:
+        return self._scaled(28) if self._show_menu_bar else 0
+
+    def _chrome_top(self) -> int:
+        return 3 if self._show_border else 0
+
+    def _update_chrome_layout(self, w: int) -> None:
+        if not self._show_menu_bar:
+            self._menu_bar_rect = (0, 0, 0, 0)
+            self._settings_btn_rect = (0, 0, 0, 0)
+            self._close_btn_rect = (0, 0, 0, 0)
+            return
+        top = self._chrome_top()
+        bar_h = self._menu_bar_h()
+        close_size = self._scaled(26)
+        settings_size = self._scaled(26)
+        gap = self._scaled(4)
+        right_pad = self._scaled(6)
+        close_right = w - right_pad
+        close_left = close_right - close_size
+        settings_right = close_left - gap
+        settings_left = settings_right - settings_size
+        self._menu_bar_rect = (0, top, w, top + bar_h)
+        self._close_btn_rect = (close_left, top + 2, close_right, top + bar_h - 2)
+        self._settings_btn_rect = (settings_left, top + 2, settings_right, top + bar_h - 2)
+
+    @staticmethod
+    def _point_in_rect(x: int, y: int, rect: Tuple[int, int, int, int]) -> bool:
+        left, top, right, bottom = rect
+        return left <= x < right and top <= y < bottom
+
+    def _screen_point_to_client(self, hwnd, lparam) -> Tuple[int, int]:
+        x = ctypes.c_short(lparam & 0xFFFF).value
+        y = ctypes.c_short((lparam >> 16) & 0xFFFF).value
+        pt = POINT(x, y)
+        user32.ScreenToClient(hwnd, ctypes.byref(pt))
+        return pt.x, pt.y
+
+    def _client_point(self, lparam) -> Tuple[int, int]:
+        x = ctypes.c_short(lparam & 0xFFFF).value
+        y = ctypes.c_short((lparam >> 16) & 0xFFFF).value
+        return x, y
+
+    def _chrome_button_at(self, x: int, y: int) -> Optional[str]:
+        if self._point_in_rect(x, y, self._close_btn_rect):
+            return "close"
+        if self._point_in_rect(x, y, self._settings_btn_rect):
+            return "settings"
+        return None
+
+    def _invoke_settings(self) -> None:
+        cb = self._on_settings
+        if cb:
+            cb()
+
+    def _invoke_close(self) -> None:
+        self.hide()
+        cb = self._on_close
+        if cb:
+            cb()
 
     def _scaled(self, px: int) -> int:
         return max(8, int(px * self._scale_percent / 100))
@@ -572,28 +704,279 @@ class Overlay:
             return h
         return self._draw_text_at(hdc, self._fonts["lethal"], line, x, y, color)[1]
 
+    def _cursor_gear_points(
+        self,
+        cx: float,
+        cy: float,
+        half: float,
+        *,
+        teeth: int = 6,
+    ) -> Tuple[Tuple[float, float], ...]:
+        """Cursor codicon 风格齿轮：圆角齿、细线框、中心留空。"""
+        points: list[Tuple[float, float]] = []
+        for i in range(teeth):
+            base = (2.0 * math.pi * i / teeth) - (math.pi / 2.0)
+            span = math.pi / teeth
+            r_outer = half * 0.90
+            r_inner = half * 0.64
+            for angle, radius in (
+                (base - span * 0.95, r_inner),
+                (base - span * 0.45, r_outer),
+                (base - span * 0.12, r_outer),
+                (base + span * 0.12, r_outer),
+                (base + span * 0.45, r_outer),
+                (base + span * 0.95, r_inner),
+            ):
+                points.append((
+                    cx + math.cos(angle) * radius,
+                    cy + math.sin(angle) * radius,
+                ))
+        return tuple(points)
+
+    def _pil_rgb_to_bgr_buffer(self, img) -> Tuple[bytes, int, int]:
+        """PIL RGB -> 4 字节对齐的 BGR 行缓冲（供 DIB）。"""
+        w, h = img.size
+        row_bytes = ((w * 3 + 3) // 4) * 4
+        buf = bytearray(row_bytes * h)
+        raw = img.tobytes("raw", "BGR")
+        src_stride = w * 3
+        for y in range(h):
+            off = y * row_bytes
+            src_off = y * src_stride
+            buf[off:off + src_stride] = raw[src_off:src_off + src_stride]
+        return bytes(buf), w, h
+
+    def _blit_pil_rgb(self, hdc, x: int, y: int, pil_image) -> bool:
+        """将 PIL RGB 图 BitBlt 到目标 DC。"""
+        try:
+            from PIL import Image
+        except ImportError:
+            return False
+        if not isinstance(pil_image, Image.Image):
+            return False
+        img = pil_image.convert("RGB")
+        w, h = img.size
+        if w <= 0 or h <= 0:
+            return False
+
+        class BITMAPINFOHEADER(ctypes.Structure):
+            _fields_ = [
+                ("biSize", DWORD),
+                ("biWidth", ctypes.c_long),
+                ("biHeight", ctypes.c_long),
+                ("biPlanes", WORD),
+                ("biBitCount", WORD),
+                ("biCompression", DWORD),
+                ("biSizeImage", DWORD),
+                ("biXPelsPerMeter", ctypes.c_long),
+                ("biYPelsPerMeter", ctypes.c_long),
+                ("biClrUsed", DWORD),
+                ("biClrImportant", DWORD),
+            ]
+
+        class BITMAPINFO(ctypes.Structure):
+            _fields_ = [("bmiHeader", BITMAPINFOHEADER)]
+
+        buf, bw, bh = self._pil_rgb_to_bgr_buffer(img)
+        bmi = BITMAPINFO()
+        bmi.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+        bmi.bmiHeader.biWidth = bw
+        bmi.bmiHeader.biHeight = -bh
+        bmi.bmiHeader.biPlanes = 1
+        bmi.bmiHeader.biBitCount = 24
+        bmi.bmiHeader.biCompression = 0
+
+        hdc_screen = user32.GetDC(None)
+        try:
+            bits = ctypes.c_void_p()
+            hbmp = gdi32.CreateDIBSection(
+                hdc_screen, ctypes.byref(bmi), 0,
+                ctypes.byref(bits), None, 0,
+            )
+            if not hbmp or not bits.value:
+                return False
+            ctypes.memmove(bits.value, buf, len(buf))
+            hdc_mem = gdi32.CreateCompatibleDC(hdc_screen)
+            if not hdc_mem:
+                gdi32.DeleteObject(hbmp)
+                return False
+            old = gdi32.SelectObject(hdc_mem, hbmp)
+            ok = bool(gdi32.BitBlt(hdc, x, y, w, h, hdc_mem, 0, 0, SRCCOPY))
+            gdi32.SelectObject(hdc_mem, old)
+            gdi32.DeleteDC(hdc_mem)
+            gdi32.DeleteObject(hbmp)
+            return ok
+        finally:
+            user32.ReleaseDC(None, hdc_screen)
+
+    def _draw_settings_icon_pil(
+        self,
+        hdc,
+        rect: Tuple[int, int, int, int],
+        fg_rgb,
+        bg_rgb,
+    ) -> bool:
+        """Pillow 抗锯齿渲染（优先，最接近 Cursor 清晰度）。"""
+        try:
+            from PIL import Image, ImageDraw
+        except ImportError:
+            return False
+
+        l, t, r, b = rect
+        dw, dh = max(1, r - l), max(1, b - t)
+        ss = _SETTINGS_ICON_SS
+        sw, sh = dw * ss, dh * ss
+        img = Image.new("RGB", (sw, sh), bg_rgb)
+        draw = ImageDraw.Draw(img)
+        cx, cy = sw / 2.0, sh / 2.0
+        half = min(sw, sh) / 2.0 - ss * 2.5
+        pts = self._cursor_gear_points(cx, cy, half)
+        stroke = max(2, int(round(ss * 1.25)))
+        draw.line(
+            list(pts) + [pts[0]],
+            fill=fg_rgb,
+            width=stroke,
+            joint="curve",
+        )
+        hub_r = half * 0.34
+        draw.ellipse(
+            (cx - hub_r, cy - hub_r, cx + hub_r, cy + hub_r),
+            fill=bg_rgb,
+            outline=fg_rgb,
+            width=max(1, stroke - 1),
+        )
+        img = img.resize((dw, dh), Image.Resampling.LANCZOS)
+        return self._blit_pil_rgb(hdc, l, t, img)
+
+    def _draw_settings_icon_gdi(
+        self,
+        hdc,
+        rect: Tuple[int, int, int, int],
+        fg_rgb,
+        bg_rgb,
+    ) -> None:
+        """GDI 超采样 + HALFTONE 缩放（无 Pillow 时回退）。"""
+        l, t, r, b = rect
+        dw, dh = max(1, r - l), max(1, b - t)
+        ss = _SETTINGS_ICON_SS
+        sw, sh = dw * ss, dh * ss
+
+        hdc_screen = user32.GetDC(None)
+        hdc_mem = gdi32.CreateCompatibleDC(hdc_screen)
+        hbmp = gdi32.CreateCompatibleBitmap(hdc_screen, sw, sh)
+        old_bmp = gdi32.SelectObject(hdc_mem, hbmp)
+        try:
+            bg_brush = gdi32.CreateSolidBrush(RGB(*bg_rgb))
+            fill_rect = RECT(0, 0, sw, sh)
+            user32.FillRect(hdc_mem, ctypes.byref(fill_rect), bg_brush)
+            gdi32.DeleteObject(bg_brush)
+
+            cx, cy = sw / 2.0, sh / 2.0
+            half = min(sw, sh) / 2.0 - ss * 2.5
+            pts_float = self._cursor_gear_points(cx, cy, half)
+            pts = [POINT(int(round(x)), int(round(y))) for x, y in pts_float]
+            pt_arr = (POINT * len(pts))(*pts)
+
+            null_brush = gdi32.GetStockObject(5)
+            pen_w = max(1, int(round(ss * 1.25)))
+            pen = gdi32.CreatePen(0, pen_w, RGB(*fg_rgb))
+            gdi32.SelectObject(hdc_mem, null_brush)
+            gdi32.SelectObject(hdc_mem, pen)
+            gdi32.Polygon(hdc_mem, pt_arr, len(pts))
+
+            hub_r = int(half * 0.34)
+            hub_pen = gdi32.CreatePen(0, max(1, pen_w - 1), RGB(*fg_rgb))
+            hub_brush = gdi32.CreateSolidBrush(RGB(*bg_rgb))
+            gdi32.SelectObject(hdc_mem, hub_brush)
+            gdi32.SelectObject(hdc_mem, hub_pen)
+            gdi32.Ellipse(
+                hdc_mem,
+                int(cx - hub_r), int(cy - hub_r),
+                int(cx + hub_r), int(cy + hub_r),
+            )
+            gdi32.DeleteObject(pen)
+            gdi32.DeleteObject(hub_pen)
+            gdi32.DeleteObject(hub_brush)
+
+            old_mode = gdi32.SetStretchBltMode(hdc, HALFTONE)
+            gdi32.SetBrushOrgEx(hdc, 0, 0, None)
+            gdi32.StretchBlt(hdc, l, t, dw, dh, hdc_mem, 0, 0, sw, sh, SRCCOPY)
+            gdi32.SetStretchBltMode(hdc, old_mode)
+        finally:
+            gdi32.SelectObject(hdc_mem, old_bmp)
+            gdi32.DeleteObject(hbmp)
+            gdi32.DeleteDC(hdc_mem)
+            user32.ReleaseDC(None, hdc_screen)
+
+    def _draw_settings_icon(
+        self,
+        hdc,
+        rect: Tuple[int, int, int, int],
+        fg_rgb,
+        bg_rgb,
+    ) -> None:
+        """菜单栏设置齿轮（Cursor 同款：高分辨率抗锯齿）。"""
+        if not self._draw_settings_icon_pil(hdc, rect, fg_rgb, bg_rgb):
+            self._draw_settings_icon_gdi(hdc, rect, fg_rgb, bg_rgb)
+
     def _draw_chrome(self, hdc, w: int, h: int, bg_rgb, fg_rgb):
+        self._update_chrome_layout(w)
         if self._show_border:
             border = gdi32.CreateSolidBrush(RGB(*self._accent_rgb))
             edge = RECT(0, 0, w, 3)
             user32.FillRect(hdc, ctypes.byref(edge), border)
             gdi32.DeleteObject(border)
+        if not self._show_menu_bar:
+            return
+        left, top, right, bottom = self._menu_bar_rect
+        bar_h = bottom - top
+        bar_bg = tuple(max(0, int(bg_rgb[i] * 0.82)) for i in range(3))
+        bar_brush = gdi32.CreateSolidBrush(RGB(*bar_bg))
+        bar_rect = RECT(left, top, right, bottom)
+        user32.FillRect(hdc, ctypes.byref(bar_rect), bar_brush)
+        gdi32.DeleteObject(bar_brush)
+
+        btn_bg = tuple(
+            int(bar_bg[i] * 0.75 + fg_rgb[i] * 0.25) for i in range(3)
+        )
+        for rect in (self._settings_btn_rect, self._close_btn_rect):
+            l, t, r, b = rect
+            btn_rect = RECT(l, t, r, b)
+            btn_brush = gdi32.CreateSolidBrush(RGB(*btn_bg))
+            user32.FillRect(hdc, ctypes.byref(btn_rect), btn_brush)
+            gdi32.DeleteObject(btn_brush)
+
+        menu_fg = RGB(*fg_rgb)
+        self._draw_settings_icon(hdc, self._settings_btn_rect, fg_rgb, btn_bg)
         if self._show_header and self._header_text:
-            header_y = 6 if self._show_border else self._pad_y // 2
+            title_w, title_h = self._text_extent(hdc, self._fonts["info"], self._header_text)
+            title_right = self._settings_btn_rect[0] - self._scaled(8)
+            title_x = max(self._pad_x, (title_right - title_w) // 2)
+            title_y = top + max(2, (bar_h - title_h) // 2)
             muted = tuple(
-                int(fg_rgb[i] * 0.55 + bg_rgb[i] * 0.45) for i in range(3)
+                int(fg_rgb[i] * 0.65 + bg_rgb[i] * 0.35) for i in range(3)
             )
             self._draw_text_at(
                 hdc, self._fonts["info"], self._header_text,
-                self._pad_x, header_y, RGB(*muted),
+                title_x, title_y, RGB(*muted),
             )
+        close_cx = (self._close_btn_rect[0] + self._close_btn_rect[2]) // 2
+        close_cy = (self._close_btn_rect[1] + self._close_btn_rect[3]) // 2
+        close_label = "×"
+        close_w, close_h = self._text_extent(hdc, self._fonts["info"], close_label)
+        self._draw_text_at(
+            hdc, self._fonts["info"], close_label,
+            close_cx - close_w // 2,
+            close_cy - close_h // 2,
+            menu_fg,
+        )
 
     def _content_top(self) -> int:
         top = self._pad_y
         if self._show_border:
             top += 4
-        if self._show_header and self._header_text:
-            top += self._scaled(22)
+        if self._show_menu_bar:
+            top += self._menu_bar_h()
         return top
 
     def _paint_text(self, hdc, text: str, w: int, h: int, color: int):
@@ -636,8 +1019,8 @@ class Overlay:
         extra_h = 0
         if self._show_border:
             extra_h += 4
-        if self._show_header and self._header_text:
-            extra_h += self._scaled(22)
+        if self._show_menu_bar:
+            extra_h += self._menu_bar_h()
         if not lines:
             return w, self._fixed_h + extra_h
         hdc = user32.GetDC(None)
@@ -653,17 +1036,37 @@ class Overlay:
 
     def _wndproc(self, hwnd, msg, wparam, lparam):
         if msg == WM_NCHITTEST:
-            # 整块区域可拖动（需去掉 WS_EX_TRANSPARENT）
+            if self._show_menu_bar:
+                x, y = self._screen_point_to_client(hwnd, lparam)
+                if self._chrome_button_at(x, y):
+                    return HTCLIENT
             return HTCAPTION
         if msg == WM_SETCURSOR:
+            hit = lparam & 0xFFFF
+            if hit == HTCLIENT and self._show_menu_bar:
+                pt = POINT()
+                user32.GetCursorPos(ctypes.byref(pt))
+                user32.ScreenToClient(hwnd, ctypes.byref(pt))
+                if self._chrome_button_at(pt.x, pt.y):
+                    user32.SetCursor(user32.LoadCursorW(None, IDC_HAND))
+                    return 1
             user32.SetCursor(user32.LoadCursorW(None, IDC_SIZEALL))
             return 1
+        if msg == WM_LBUTTONUP:
+            x, y = self._client_point(lparam)
+            btn = self._chrome_button_at(x, y)
+            if btn == "settings":
+                self._invoke_settings()
+                return 0
+            if btn == "close":
+                self._invoke_close()
+                return 0
         if msg in (WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE):
             with self._pos_lock:
                 self._user_positioned = True
             return 0
         if msg == WM_CLOSE:
-            user32.DestroyWindow(hwnd)
+            self._invoke_close()
             return 0
         if msg == WM_DESTROY:
             user32.PostQuitMessage(0)
@@ -1030,6 +1433,16 @@ class Overlay:
                 self._enable_layered()
 
             while not self.stop_event.is_set():
+                if self._user_closed:
+                    if self.hwnd and user32.IsWindowVisible(self.hwnd):
+                        user32.ShowWindow(self.hwnd, SW_HIDE)
+                    msg = MSG()
+                    while user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 1):
+                        user32.TranslateMessage(ctypes.byref(msg))
+                        user32.DispatchMessageW(ctypes.byref(msg))
+                    time.sleep(0.3)
+                    continue
+
                 hs = self._find_hs_window()
 
                 with self._text_lock:
@@ -1284,6 +1697,16 @@ class ComboOverlay(Overlay):
                 self._enable_layered()
 
             while not self.stop_event.is_set():
+                if self._user_closed:
+                    if self.hwnd and user32.IsWindowVisible(self.hwnd):
+                        user32.ShowWindow(self.hwnd, SW_HIDE)
+                    msg = MSG()
+                    while user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 1):
+                        user32.TranslateMessage(ctypes.byref(msg))
+                        user32.DispatchMessageW(ctypes.byref(msg))
+                    time.sleep(0.3)
+                    continue
+
                 hs = self._find_hs_window()
                 with self._text_lock:
                     text = (self._text or "").strip()

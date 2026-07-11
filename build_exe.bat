@@ -30,5 +30,5 @@ if errorlevel 1 (
 echo.
 echo 完成: dist\HS-Lethal-Helper.exe
 echo 我方 PlayerID 自动识别，无需配置战网名
-echo 设置: dist\HS-Lethal-Helper.exe --settings
+echo 设置: 运行后在浮层菜单栏点击「设置」
 endlocal

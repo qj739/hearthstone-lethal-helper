@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
 from typing import Callable, Optional
@@ -54,7 +55,20 @@ class OverlaySettingsWindow:
             fg="#8a9199",
             bg="#1e2329",
             font=("Consolas", 9),
-        ).pack(side="right", padx=12)
+        ).pack(side="right", padx=(0, 4))
+        close_btn = tk.Label(
+            header,
+            text="×",
+            fg="#c5c9ce",
+            bg="#1e2329",
+            font=("Segoe UI", 16),
+            cursor="hand2",
+            width=2,
+        )
+        close_btn.pack(side="right", padx=(0, 8), pady=8)
+        close_btn.bind("<Button-1>", lambda _e: self.root.destroy() if self.root else None)
+        close_btn.bind("<Enter>", lambda _e: close_btn.configure(fg="#ffffff", bg="#3a4048"))
+        close_btn.bind("<Leave>", lambda _e: close_btn.configure(fg="#c5c9ce", bg="#1e2329"))
 
         body = ttk.Frame(self.root, padding=12)
         body.pack(fill="both", expand=True)
@@ -231,3 +245,31 @@ def open_settings_dialog(
     store = store or OverlaySettingsStore()
     store.load()
     OverlaySettingsWindow(store, on_apply=on_apply).run()
+
+
+_settings_dialog_lock = threading.Lock()
+_settings_dialog_open = False
+
+
+def open_settings_dialog_async(
+    store: Optional[OverlaySettingsStore] = None,
+    *,
+    on_apply: Optional[Callable[[OverlaySettings], None]] = None,
+) -> bool:
+    """在后台线程打开设置窗，避免阻塞 overlay / 追踪主循环。"""
+    global _settings_dialog_open
+    with _settings_dialog_lock:
+        if _settings_dialog_open:
+            return False
+        _settings_dialog_open = True
+
+    def _run() -> None:
+        global _settings_dialog_open
+        try:
+            open_settings_dialog(store, on_apply=on_apply)
+        finally:
+            with _settings_dialog_lock:
+                _settings_dialog_open = False
+
+    threading.Thread(target=_run, name="OverlaySettingsUI", daemon=True).start()
+    return True

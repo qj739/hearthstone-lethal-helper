@@ -203,6 +203,26 @@ def living_taunt_units(units: List[dict]) -> List[dict]:
     ]
 
 
+def rush_enable_face_if_no_enemy_minions(
+    fighters: List[dict], enemy_board: List[dict],
+) -> None:
+    """对手场上无随从时，当回合突袭可打脸（亡者大军等）。"""
+    has_enemy_minion = any(
+        unit_is_active_minion(m) and m.get("kind") != "hero"
+        for m in enemy_board
+    )
+    if has_enemy_minion:
+        return
+    for f in _normalize_fighters(fighters):
+        if (
+            f.get("rush")
+            and f.get("attacks_left", 0) > 0
+            and f.get("health", 0) > 0
+            and f.get("kind") == "minion"
+        ):
+            f["can_face"] = True
+
+
 def project_board_face_after_spell(
     taunts: List[dict],
     fighters: List[dict],
@@ -212,9 +232,10 @@ def project_board_face_after_spell(
     fighters = _normalize_fighters(fighters)
     alive_taunts = living_taunt_units(taunts)
     if not alive_taunts:
-        fs, _ = exhaust_rush_on_enemy_minions(
+        fs, board = exhaust_rush_on_enemy_minions(
             fighters, taunts, defender_shield,
         )
+        rush_enable_face_if_no_enemy_minions(fs, board)
         return fighters_face_damage(fs, defender_shield)
     face = find_best_taunt_clear_face(fighters, alive_taunts, defender_shield)
     return face if face is not None else 0

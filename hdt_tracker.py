@@ -7,7 +7,7 @@
 1. 确保炉石传说已启动
 2. 运行: python hdt_tracker.py
 3. 工具会自动监控游戏日志并检测斩杀机会
-4. 设置界面: python hdt_tracker.py --settings
+4. 浮层菜单栏「设置」可打开配置面板；右上角 × 可隐藏浮层
 
 首次运行会自动安装 log.config 配置文件
 """
@@ -87,7 +87,7 @@ class HearthstoneTracker:
             "ATTACKABLE_BY_RUSH", "ARMOR", "MAIN_HAND_WEAPON_ENTITY", "TURN", "CURRENT_PLAYER",
             "FIRST_PLAYER", "DORMANT", "DORMANT_AWAKEN_CONDITION_ENCHANT", "UNTOUCHABLE",
             "TITAN", "SILENCED", "HIDE_STATS", "TAUNT",
-            "LOCATION_ACTION_COOLDOWN", "POWERED_UP",
+            "LOCATION_ACTION_COOLDOWN", "POWERED_UP", "COMBO_ACTIVE",
         }
 
         self.attach_overlay = attach_overlay
@@ -113,6 +113,21 @@ class HearthstoneTracker:
             )
             self.combo_overlay.apply_settings(cfg)
             self.settings_store.on_change(self._on_overlay_settings_changed)
+            self.overlay.set_action_callbacks(
+                on_settings=self._open_overlay_settings,
+                on_close=self._on_overlay_close,
+            )
+
+    def _open_overlay_settings(self) -> None:
+        from overlay_settings_ui import open_settings_dialog_async
+        open_settings_dialog_async(
+            self.settings_store,
+            on_apply=self._on_overlay_settings_changed,
+        )
+
+    def _on_overlay_close(self) -> None:
+        if self.combo_overlay:
+            self.combo_overlay.hide()
 
     def _on_overlay_settings_changed(self, settings: OverlaySettings) -> None:
         self.overlay_settings = settings
@@ -179,19 +194,26 @@ class HearthstoneTracker:
                 "TURN", "CURRENT_PLAYER",
             ):
                 self._console_dirty = True
+            if tag == "COMBO_ACTIVE":
+                self._invalidate_lethal_overlay(immediate=True)
+            elif tag == "DAMAGE":
+                opp = self.game_state.opponent_player_id
+                hero_ids = self.game_state.hero_entity_ids
+                if opp and hero_ids.get(opp) == getattr(entity, "entity_id", None):
+                    self._invalidate_lethal_overlay(immediate=True)
             immediate = tag in (
                 "EXHAUSTED", "NUM_ATTACKS_THIS_TURN", "1196", "JUST_PLAYED",
-                "TURN", "CURRENT_PLAYER", "POWERED_UP",
+                "TURN", "CURRENT_PLAYER", "POWERED_UP", "COMBO_ACTIVE", "DAMAGE",
             )
             if immediate and (
-                tag in ("TURN", "CURRENT_PLAYER")
+                tag in ("TURN", "CURRENT_PLAYER", "COMBO_ACTIVE", "DAMAGE")
                 or self._entity_affects_local_board(entity)
             ):
                 self._invalidate_lethal_overlay(immediate=True)
 
         self.power_parser.on("tag_changed", on_tag_changed)
         self.power_parser.on("entity_created", self._on_entity_created)
-        self.power_parser.on("entity_updated", lambda e: setattr(self, "_overlay_dirty", True))
+        self.power_parser.on("entity_updated", self._on_entity_updated)
         self.power_parser.on("change_entity", self._on_change_entity)
         self.power_parser.on("entity_transform_ready", self._on_entity_transform_ready)
         self.power_parser.on("game_start", self._on_game_start)
@@ -212,6 +234,11 @@ class HearthstoneTracker:
             return True
         return self.game_state.is_entity_controlled_by(entity, local)
 
+    def _on_entity_updated(self, entity):
+        self._overlay_dirty = True
+        if self._entity_affects_local_board(entity):
+            self._invalidate_lethal_overlay(immediate=True)
+
     def _invalidate_lethal_overlay(self, *, immediate: bool = False) -> None:
         if self.lethal_checker:
             self.lethal_checker.clear_overlay_cache()
@@ -221,7 +248,7 @@ class HearthstoneTracker:
             self._force_immediate_overlay = True
 
     def _on_entity_created(self, entity):
-        """新实体（含未知手牌、希奈丝特拉随机法术入牌）立即标脏。"""
+        """新实体（含未知手牌、英雄技能 token 落场）立即标脏。"""
         from hdt_python.board_damage import entity_zone
 
         if entity is None:
@@ -229,10 +256,8 @@ class HearthstoneTracker:
         local = self.game_state.local_player_id
         if local is None:
             return
-        if (
-            entity_zone(entity) == "HAND"
-            and self.game_state.is_entity_controlled_by(entity, local)
-        ):
+        zone = entity_zone(entity)
+        if zone in ("HAND", "PLAY") and self.game_state.is_entity_controlled_by(entity, local):
             self._invalidate_lethal_overlay(immediate=True)
 
     def _on_change_entity(self, entity):
@@ -304,6 +329,8 @@ class HearthstoneTracker:
         """刷新浮层（约每秒一次，不节流）"""
         if not self.overlay:
             return
+        if self.overlay.is_user_closed:
+            return
         if not self._replay_ready:
             self.overlay.set_text("正在同步对局…", theme=Overlay.THEME_NORMAL)
             if self.combo_overlay:
@@ -339,6 +366,9 @@ class HearthstoneTracker:
         prompt_lethal = self.lethal_checker.overlay_lethal_prompt_ok(
             has_lethal, opp_lethal_now=opp_lethal_now,
         )
+        show_lethal = self.lethal_checker.overlay_red_prompt_ok(
+            opp_lethal_now=opp_lethal_now,
+        )
 
         self._update_overlay(
             total_damage, health, armor, has_lethal,
@@ -349,12 +379,12 @@ class HearthstoneTracker:
             opp_lethal_now=opp_lethal_now,
         )
 
-        if prompt_lethal and not self.last_lethal_check:
+        if (prompt_lethal or show_lethal) and not self.last_lethal_check:
             print("\n" + "🎯" * 30)
             print("⚔️  斩杀提示！检测到斩杀机会！ ⚔️")
             print("🎯" * 30)
             self.lethal_checker.print_lethal_info()
-        self.last_lethal_check = prompt_lethal
+        self.last_lethal_check = prompt_lethal or show_lethal
 
     def _refresh_console(self):
         """刷新控制台状态（约每 2 秒一次）"""
@@ -464,6 +494,21 @@ class HearthstoneTracker:
             atk_line = f"场攻 {mc_max} ({lethal_prob * 100:.0f}%)"
         else:
             atk_line = f"场攻 {board_atk}"
+
+        show_lethal = self.lethal_checker.overlay_red_prompt_ok(
+            opp_lethal_now=opp_lethal_now,
+        )
+        if show_lethal:
+            dmg_show = mc_max if uses_random else lethal_face
+            if is_opp_turn:
+                if uses_random and 0 < lethal_prob < 1.0:
+                    atk_line = f"⚔️下回合斩 {dmg_show} ({lethal_prob * 100:.0f}%)"
+                else:
+                    atk_line = f"⚔️下回合斩 {dmg_show}"
+            elif uses_random and 0 < lethal_prob < 1.0:
+                atk_line = f"⚔️斩杀 {mc_max} ({lethal_prob * 100:.0f}%)"
+            else:
+                atk_line = f"⚔️斩杀 {dmg_show}"
         if extras:
             atk_line += f" ({'+'.join(extras)})"
         lines.append(atk_line)
@@ -510,25 +555,32 @@ class HearthstoneTracker:
             has_lethal, opp_lethal_now=opp_lethal_now,
         )
         diff_damage = self.lethal_checker.overlay_diff_damage(
-            total_damage, has_lethal,
+            total_damage, has_lethal or show_lethal,
         )
         diff_note = self.lethal_checker.overlay_lethal_diff_note(
             total_damage, opp_total, has_lethal=has_lethal, prompt_lethal=prompt_lethal,
         )
         if cfg.show_lethal_diff:
             if is_opp_turn:
-                if prompt_lethal:
-                    lethal_parts.append(f"⚔️ 下回合斩 {total_damage}≥{opp_total}")
+                if show_lethal or prompt_lethal:
+                    dmg_line = mc_max if uses_random else lethal_face
+                    if uses_random and 0 < lethal_prob < 1.0:
+                        lethal_parts.append(
+                            f"⚔️ 下回合斩 {dmg_line}≥{opp_total} ({lethal_prob * 100:.0f}%)"
+                        )
+                    else:
+                        lethal_parts.append(f"⚔️ 下回合斩 {dmg_line}≥{opp_total}")
                 elif not opp_lethal_now:
                     diff = opp_total - diff_damage
                     lethal_parts.append(f"下回合 {diff_damage}/{opp_total} 差{diff}")
-            elif prompt_lethal:
+            elif show_lethal or prompt_lethal:
+                dmg_line = mc_max if uses_random else lethal_face
                 if uses_random and 0 < lethal_prob < 1.0:
                     lethal_parts.append(
-                        f"⚔️ 概率斩杀 {mc_max}≥{opp_total} ({lethal_prob * 100:.0f}%)"
+                        f"⚔️ 概率斩杀 {dmg_line}≥{opp_total} ({lethal_prob * 100:.0f}%)"
                     )
                 else:
-                    lethal_parts.append(f"⚔️ 斩杀 {total_damage}≥{opp_total}")
+                    lethal_parts.append(f"⚔️ 斩杀 {dmg_line}≥{opp_total}")
             elif self.lethal_checker.lethal_calc_timed_out():
                 lethal_parts.append("⏱ 斩杀计算超时")
             else:
@@ -539,8 +591,6 @@ class HearthstoneTracker:
                 lethal_parts.append(line)
         if lethal_parts:
             lines.extend(lethal_parts if not cfg.compact_mode else [" · ".join(lethal_parts)])
-
-        show_lethal = prompt_lethal
 
         combo_lines: list[str] = []
         if cfg.show_combo_overlay and show_lethal:
@@ -823,11 +873,6 @@ def main():
         help='与 HDT 插件导出的场面 JSON 对比（需安装 hdt_plugin/CompareExporter）',
     )
     parser.add_argument(
-        '--settings',
-        action='store_true',
-        help='打开 Overlay 设置窗口（保存到 overlay_settings.json）',
-    )
-    parser.add_argument(
         '--settings-path',
         type=str,
         default='',
@@ -843,11 +888,6 @@ def main():
         layered=True if args.layered else None,
         float_overlay=True if args.float_overlay else None,
     )
-
-    if args.settings:
-        from overlay_settings_ui import open_settings_dialog
-        open_settings_dialog(settings_store)
-        return
 
     use_overlay = not args.no_overlay
 

@@ -404,6 +404,29 @@ def test_masticator_attacks_minion_when_lower_than_hero():
     print("OK masticator minion lowest", face)
 
 
+def test_masticator_after_simulated_face_damage():
+    """模拟先打脸 6 后：英雄 2 血低于 3 血随从，回合结束应打脸。"""
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.in_game = True
+    _hero(gs, 1, 1)
+    _hero(gs, 2, 2)
+    _minion_db(gs, 10, 1, "RLK_720", can_attack=False)
+    opp = gs.get_hero(2)
+    opp.health = 30
+    opp.damage = 22
+    opp.tags["HEALTH"] = 30
+    enemy = [{"health": 3, "taunt": False, "shield": False, "kind": "minion"}]
+    face, _ = end_turn_face_damage(
+        _board_entities(gs, 1), enemy, False,
+        game_state=gs, player_id=1,
+        opponent_hero_hp=2,
+    )
+    assert face == 5, f"expected 5 face on 2hp hero after sim attacks, got {face}"
+    print("OK masticator after sim face", face)
+
+
 def test_masticator_hand_opp_turn_overlay():
     """对方回合：手牌嚼嚼怪应计入下回合打出后的回合结束 5 打脸。"""
     gs = GameState()

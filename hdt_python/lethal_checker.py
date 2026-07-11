@@ -1371,10 +1371,13 @@ class LethalChecker:
                 total, minion_board, weapon_board, spell_face, hp_board, hero_buff_board,
             )
         extra = sim_end_turn_entities_from_fighters(fighters)
+        eff_hp = self.get_opponent_effective_hp()
+        hero_hp_after = max(0, eff_hp - max(0, int(total)))
         et_face, _ = end_turn_face_damage(
             our_board, enemy, defender_shield,
             game_state=self.game_state, player_id=local, rng=rng,
             extra_board_entities=extra or None,
+            opponent_hero_hp=hero_hp_after,
         )
         if et_face <= 0:
             return (
@@ -1513,6 +1516,9 @@ class LethalChecker:
             fs, enemy, defender_shield,
             spell_face=spell_component, hp_direct=hp_direct, rng=rng,
         )
+        from .combat_sim import rush_enable_face_if_no_enemy_minions
+
+        rush_enable_face_if_no_enemy_minions(fs, enemy)
         living_taunts = self._living_taunt_states(enemy)
         if living_taunts:
             _, clear_ls, can_clear = self._simulate_taunt_clear_from_state(
@@ -2213,6 +2219,7 @@ class LethalChecker:
                 our_board, eb, defender_shield,
                 game_state=self.game_state, player_id=local,
                 rng=random.Random(i + 401),
+                opponent_hero_hp=max(0, effective_hp - fb),
             )
             total = fb + et
             counts[total] = counts.get(total, 0) + 1
@@ -2445,6 +2452,30 @@ class LethalChecker:
             next_turn_preview=self._hero_power_next_turn(),
         )
 
+    def overlay_red_prompt_ok(self, *, opp_lethal_now: bool = False) -> bool:
+        """
+        Overlay 是否应变红：仅看场攻模拟总伤 vs 对手有效血，不受法力校验影响。
+        我方回合=本回合斩；对方回合=下回合斩预览（与 calculate_lethal_potential 一致）。
+        """
+        if opp_lethal_now:
+            return False
+        if not self.is_local_turn() and not self.is_opponent_turn():
+            return False
+        if not getattr(self, "_overlay_face_computed", False):
+            return False
+        if getattr(self, "_overlay_incomplete", False):
+            return False
+        face = int(getattr(self, "_overlay_total_face", 0) or 0)
+        mc_max, lethal_prob, uses_random, _top = self.overlay_face_stats()
+        threshold = self._lethal_threshold_hp(subtract_overlay_lifesteal=True)
+        if threshold <= 0:
+            return False
+        if uses_random:
+            return face >= threshold or (
+                mc_max >= threshold and lethal_prob >= MIN_LETHAL_PROMPT_PROB
+            )
+        return face >= threshold
+
     def overlay_lethal_prompt_ok(
         self,
         has_lethal: bool,
@@ -2452,7 +2483,11 @@ class LethalChecker:
         opp_lethal_now: bool = False,
     ) -> bool:
         """是否向用户展示斩杀提示（含随机线概率阈值）。"""
-        if opp_lethal_now or not has_lethal:
+        if opp_lethal_now:
+            return False
+        if self.overlay_red_prompt_ok(opp_lethal_now=False):
+            return True
+        if not has_lethal:
             return False
         _mc_max, lethal_prob, uses_random, _top = self.overlay_face_stats()
         if not uses_random:

@@ -550,16 +550,21 @@ def end_turn_face_damage(
     player_id: Optional[int] = None,
     rng: Optional[random.Random] = None,
     extra_board_entities: Optional[List] = None,
+    opponent_hero_hp: Optional[int] = None,
 ) -> Tuple[int, List[str]]:
     """
     回合结束追加打脸（在当回合攻击/法术模拟之后结算）。
     返回 (打脸伤害, 来源说明列表)。
+    opponent_hero_hp：模拟线内已打脸后的英雄有效生命（侏儒嚼嚼怪等选目标用）。
     """
     override_eids = _fighter_end_turn_override_eids(extra_board_entities)
     board_entities = merge_board_entities_for_end_turn(
         friendly_board_entities, extra_board_entities,
     )
-    hero_health = _opponent_hero_health(game_state, player_id)
+    if opponent_hero_hp is not None:
+        hero_health = max(0, int(opponent_hero_hp))
+    else:
+        hero_health = _opponent_hero_health(game_state, player_id)
     total = 0
     notes: List[str] = []
     for entity in board_entities:

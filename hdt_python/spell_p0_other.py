@@ -30,6 +30,7 @@ from .spell_board import (
     _remove_dead_taunts,
     _steal_enemy_minion_to_fighter,
     _summon_friendly_fighter,
+    player_corpses,
     apply_divine_shield_to_hits,
 )
 
@@ -178,6 +179,22 @@ def _apply_dart_throw(taunts, fighters, *, mult, enemy_shield, rng=None, spell_p
         taunts, fighters, hits=_sd(2, mult=mult, spell_power=spell_power), damage=2,
         enemy_shield=enemy_shield, rng=_rng(rng),
     )
+
+
+def _apply_army_of_the_dead(
+    taunts, fighters, *, mult, enemy_shield, gs=None, player_id=None, **_kw,
+) -> SpellApplyResult:
+    """亡者大军：消耗最多5份残骸，各复活为2/2突袭复活的食尸鬼。"""
+    corpses = player_corpses(gs, player_id) if gs is not None and player_id is not None else 0
+    count = min(5, corpses) * mult
+    if count <= 0:
+        return SpellApplyResult()
+    token_ids = ("RLK_060t", "CORE_RLK_060t")
+    for i in range(count):
+        _summon_friendly_fighter(
+            fighters, 2, 2, rush=True, card_id=token_ids[i % len(token_ids)],
+        )
+    return SpellApplyResult()
 
 
 def _apply_infestation(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw,) -> SpellApplyResult:
@@ -608,6 +625,7 @@ def _register_p0_other() -> None:
         (("EDR_814",), 2, "感染吐息", _apply_infested_breath, False),
         (("WW_006",), 2, "飞镖投掷", _apply_dart_throw, True),
         (("TLC_902",), 2, "虫害侵扰", _apply_infestation, False),
+        (("RLK_060", "CORE_RLK_060"), 5, "亡者大军", _apply_army_of_the_dead, False),
         (("REV_307",), 2, "自然死亡", _apply_natural_causes, False),
         (("TOY_508",), 1, "立体书", _apply_pop_up_book, False),
         (("CORE_AT_037",), 1, "活体根须", _apply_living_roots, False),

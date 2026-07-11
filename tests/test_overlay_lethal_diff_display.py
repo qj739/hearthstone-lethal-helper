@@ -65,7 +65,40 @@ def test_apply_overlay_board_lethal_does_not_inflate_total_when_mana_fails(monke
     assert total == 5, "mana 不足时不应把 total 抬到 11 导致 UI 差0"
 
 
+def test_overlay_red_prompt_ok_on_opponent_turn():
+    """对方回合下回合斩预览也应变红（总伤≥对手血）。"""
+    gs = GameState()
+    gs.local_player_id = 2
+    gs.opponent_player_id = 1
+    gs.active_player_id = 1
+    lc = LethalChecker(gs)
+    lc._overlay_face_computed = True
+    lc._overlay_incomplete = False
+    lc._overlay_total_face = 13
+    lc._overlay_mc_max = 13
+    lc._overlay_lethal_prob = 1.0
+    lc._overlay_uses_random = False
+    lc.get_opponent_effective_hp = lambda: 13
+
+    assert lc.is_opponent_turn()
+    assert not lc.is_local_turn()
+    assert lc.overlay_red_prompt_ok(opp_lethal_now=False) is True
+
+
+def test_overlay_red_blocked_when_opp_lethal_now():
+    gs = GameState()
+    gs.local_player_id = 2
+    gs.opponent_player_id = 1
+    gs.active_player_id = 1
+    lc = LethalChecker(gs)
+    lc._overlay_face_computed = True
+    lc._overlay_total_face = 13
+    assert lc.overlay_red_prompt_ok(opp_lethal_now=True) is False
+
+
 if __name__ == "__main__":
     test_overlay_diff_damage_not_inflated_when_not_lethal()
     test_overlay_lethal_diff_note_for_low_random_prob()
+    test_overlay_red_prompt_ok_on_opponent_turn()
+    test_overlay_red_blocked_when_opp_lethal_now()
     print("OK overlay diff display (unit)")

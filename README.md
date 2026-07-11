@@ -92,6 +92,24 @@ HS/
 
 与 HDT 相同，推荐使用**无边框窗口化**显示模式，浮层叠加效果更稳定。
 
+### 已实现
+
+- 实时监控场面、手牌、法力、回合（Power.log）
+- **斩杀检测**：嘲讽最优解、法力校验、随机线路概率、对手疲劳与威胁预警
+- **游戏内浮层** + 设置面板 + 推荐连招步骤
+- **法术**：直伤、AOE、解场、消灭变形（竞技场 P0/P1/P2 数百张）
+- **战吼**、**连击/流放/亮边**、武器、英雄技能、地标
+- **冲锋/突袭**、回合结束伤害、亡语有效血、先法后攻穿插
+- Power.log 回放验证、555+ 回归测试
+
+### 待扩展
+
+- Zone.log 解析（起手 unknown 手牌）
+- 完整牌库 / 对手未揭示手牌内容
+- 非竞技场模式全面支持
+- 独立桌面 GUI（当前为游戏内浮层）
+- 牌组导入/导出
+
 ### 免责声明
 
 - 仅供学习、研究与单机体验辅助，请勿用于任何违反游戏服务条款的行为。
@@ -193,6 +211,24 @@ Hearthstone client → writes Power.log → LogWatcher tails in real time
 ```
 
 Like HDT, **borderless windowed** display mode gives the most reliable overlay behavior.
+
+### Implemented
+
+- Real-time board, hand, mana, and turn tracking (Power.log)
+- **Lethal detection**: optimal taunt trades, mana checks, random-line probability, fatigue & threat warnings
+- **In-game overlay** + settings panel + recommended combo steps
+- **Spells**: direct damage, AoE, board clears, destroy/transform (hundreds of Arena cards, P0/P1/P2)
+- **Battlecries**, **Combo/Outcast/Powered Up**, weapons, hero powers, locations
+- **Charge/Rush**, end-of-turn damage, deathrattle effective HP, spell-then-attack interleaving
+- Power.log replay validation, 555+ regression tests
+
+### Planned / not yet
+
+- Zone.log parsing (unknown opening-hand cards)
+- Full deck tracking / unrevealed opponent hand contents
+- Full support outside Arena mode
+- Standalone desktop GUI (in-game overlay exists today)
+- Deck import/export
 
 ### Disclaimer
 

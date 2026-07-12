@@ -1,0 +1,8 @@
+# GitHub 展示层：将历史 Co-authored-by / 旧作者身份归并到 qj739。
+# 不改写 git 对象；Insights → Contributors 与仓库侧栏会读取此文件。
+# https://git-scm.com/docs/gitmailmap
+
+qj739 <qj739@users.noreply.github.com> Cursor Agent <cursoragent@cursor.com>
+qj739 <qj739@users.noreply.github.com> Cursor <cursoragent@cursor.com>
+qj739 <qj739@users.noreply.github.com> <cursoragent@cursor.com>
+qj739 <qj739@users.noreply.github.com> HS Lethal Helper <hs-lethal-helper@users.noreply.github.com>

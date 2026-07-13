@@ -17,6 +17,7 @@ from .board_damage import (
     hero_weapon_strike_damage,
     apply_divine_shield_to_hits,
     entity_has_taunt,
+    entity_zone,
     living_taunt_minions,
     _std_attack,
     collect_hand_charge_minions,
@@ -334,15 +335,75 @@ class LethalChecker:
         del defender_shield  # 打脸分量已由 apply_divine_shield_to_hits 计入
         return max(0, self.get_opponent_effective_hp() - max(0, face_damage))
 
+    def _opponent_deck_count(self, player_id: Optional[int] = None) -> int:
+        """对手牌库剩余张数。"""
+        opp = player_id if player_id is not None else self.game_state.opponent_player_id
+        if opp is None:
+            return 0
+        gs = self.game_state
+        entities = list(gs.entities.values())
+        return sum(
+            1
+            for e in entities
+            if gs.is_entity_controlled_by(e, opp) and entity_zone(e) == "DECK"
+        )
+
+    def _opponent_fatigue_counter(self, player_id: Optional[int] = None) -> int:
+        """对手 Player 实体 FATIGUE / FATIGUEREFERENCE（下一次抽牌疲劳伤害）。"""
+        opp = player_id if player_id is not None else self.game_state.opponent_player_id
+        if opp is None:
+            return 0
+        gs = self.game_state
+        for eid, pid in gs.player_ids.items():
+            if pid != opp:
+                continue
+            ent = gs.entities.get(eid)
+            if not ent:
+                continue
+            fatigue = int(ent.tags.get("FATIGUE", 0) or 0)
+            if fatigue > 0:
+                return fatigue
+            ref = int(ent.tags.get("FATIGUEREFERENCE", 0) or 0)
+            if ref > 0:
+                return ref
+        opp_name = gs.player_names.get(opp, "")
+        if opp_name:
+            short = opp_name.split("#")[0]
+            for ent in list(gs.entities.values()):
+                nm = getattr(ent, "name", "") or ""
+                if opp_name in nm or (short and short in nm):
+                    fatigue = int(ent.tags.get("FATIGUE", 0) or 0)
+                    if fatigue > 0:
+                        return fatigue
+                    ref = int(ent.tags.get("FATIGUEREFERENCE", 0) or 0)
+                    if ref > 0:
+                        return ref
+        return 0
+
+    def _opponent_upcoming_fatigue_damage(self) -> int:
+        """
+        对手牌库空时，下回合斩杀预览中可计入的疲劳伤害。
+        对方回合（Overlay 下回合斩）时：对手本回合开始抽牌会吃疲劳，日志 HP 可能滞后。
+        我方回合：对手疲劳发生在我们回合结束之后，不计入本回合斩杀。
+        """
+        if not self.is_opponent_turn():
+            return 0
+        if self._opponent_deck_count() > 0:
+            return 0
+        fatigue = self._opponent_fatigue_counter()
+        return max(1, fatigue)
+
     def _lethal_threshold_hp(self, *, subtract_overlay_lifesteal: bool = False) -> int:
         """
         斩杀判定用对手有效血量。
         subtract_overlay_lifesteal：本 combo 内法术/清场触发的吸血已在同一模拟里结算，
         不应再抬高有效血线（否则月亮井等 AOE 会双重计入吸血）。
+        对方回合预览下回合斩时，另减去对手即将承受的抽牌疲劳（牌库已空）。
         """
         threshold = self.get_opponent_effective_hp()
         if subtract_overlay_lifesteal:
             threshold -= int(getattr(self, "_overlay_lifesteal_heal", 0) or 0)
+        threshold -= self._opponent_upcoming_fatigue_damage()
         return max(0, threshold)
 
     def _apply_overlay_board_lethal(
@@ -493,6 +554,35 @@ class LethalChecker:
                 mana_left -= cost
 
         return spent
+
+    def _overlay_line_mana_ok(
+        self,
+        player_id: int,
+        available_mana: int,
+        *,
+        seq: Optional[List] = None,
+        use_hp: bool = False,
+        hero_power_name: Optional[str] = None,
+        hand_charges: Optional[List] = None,
+    ) -> bool:
+        """
+        场攻/斩杀展示线路法力校验：法术序列须按全额费用计入，
+        不可与英雄技能「先扣费后只算部分法术」的估算混用。
+        """
+        spell_mana = self._estimate_line_mana_spent(
+            player_id, available_mana,
+            seq=seq,
+            hero_power_name=None,
+            hand_charges=hand_charges,
+        )
+        if use_hp and hero_power_name:
+            row = usable_hero_power(
+                self.game_state, player_id, available_mana,
+                next_turn=self._hero_power_next_turn(),
+            )
+            hp_cost = row[2] if row else 0
+            return spell_mana + hp_cost <= available_mana
+        return spell_mana <= available_mana
 
     def _turn_lethal_mana_ok(
         self,
@@ -651,7 +741,7 @@ class LethalChecker:
                 enemy_states = self._build_enemy_minion_states(local)
                 our_board = self.game_state.get_board(local)
                 if end_turn_uses_random(our_board):
-                    eff = self.get_opponent_effective_hp()
+                    eff = self._lethal_threshold_hp()
                     mc_max, prob, top_outcomes, board_part = (
                         self._monte_carlo_pure_board_end_turn(
                             pure_immediate, enemy_states, opp_shield, eff,
@@ -690,7 +780,7 @@ class LethalChecker:
                 board_view, local, opp_taunts, opp_shield, hand_spells, mana,
                 pure_immediate=pure_immediate,
                 pure_et=pure_et,
-                effective_hp=self.get_opponent_effective_hp(),
+                effective_hp=self._lethal_threshold_hp(),
                 hand_charges=hand_charges,
             )
             if self._lethal_budget_expired():
@@ -791,7 +881,7 @@ class LethalChecker:
             return False
         from .spell_board import BOARD_CLEAR_SPELLS
 
-        for entity in self.game_state.entities.values():
+        for entity in list(self.game_state.entities.values()):
             if entity.zone != "PLAY":
                 continue
             if not self.game_state.is_entity_controlled_by(entity, local):
@@ -975,7 +1065,7 @@ class LethalChecker:
         if lethal_prob is not None:
             self._overlay_lethal_prob = lethal_prob
         else:
-            eff = self.get_opponent_effective_hp()
+            eff = self._lethal_threshold_hp()
             self._overlay_lethal_prob = 1.0 if total >= eff else 0.0
         self._overlay_uses_random = uses_random
         self._overlay_top_outcomes = top_outcomes or []
@@ -1371,7 +1461,7 @@ class LethalChecker:
                 total, minion_board, weapon_board, spell_face, hp_board, hero_buff_board,
             )
         extra = sim_end_turn_entities_from_fighters(fighters)
-        eff_hp = self.get_opponent_effective_hp()
+        eff_hp = self._lethal_threshold_hp()
         hero_hp_after = max(0, eff_hp - max(0, int(total)))
         et_face, _ = end_turn_face_damage(
             our_board, enemy, defender_shield,
@@ -2840,6 +2930,14 @@ class LethalChecker:
                         hero_power_name=hp_name if use_hp else None,
                         hand_charges=charges,
                     )
+                    if not self._overlay_line_mana_ok(
+                        player_id, available_mana,
+                        seq=full_seq,
+                        use_hp=use_hp,
+                        hero_power_name=hp_name if use_hp else None,
+                        hand_charges=charges,
+                    ):
+                        continue
                     if self._prefer_spell_line(
                         score, best_score, full_seq, best_seq, fighters, order, best_order,
                         effective_hp=effective_hp,
@@ -2936,16 +3034,37 @@ class LethalChecker:
             )
         )
         if floor_total > display_total:
-            prev_hp = display_hero_power_face
-            display_total = floor_total + (prev_hp if floor_hp == 0 else 0)
+            display_total = floor_total + floor_hp
             display_board = floor_board
             display_weapon_board = floor_weapon
-            display_hero_power_face = max(floor_hp, prev_hp)
+            display_hero_power_face = floor_hp
             display_score = float(floor_total)
             if not display_note and self.is_opponent_turn():
                 names = end_turn_names_on_board(self.game_state.get_board(player_id))
                 if names:
                     display_note = f"下回合+{'+'.join(names)}"
+
+        if (
+            display_total > 0
+            and display_hero_power_face > 0
+            and display_hp_name
+        ):
+            spell_mana = self._estimate_line_mana_spent(
+                player_id, available_mana,
+                seq=display_seq,
+                hero_power_name=None,
+                hand_charges=charges,
+            )
+            row = usable_hero_power(
+                self.game_state, player_id, available_mana,
+                next_turn=self._hero_power_next_turn(),
+            )
+            hp_cost = row[2] if row else 0
+            if spell_mana + hp_cost > available_mana:
+                display_total -= display_hero_power_face
+                display_hero_power_face = 0
+                display_hp_name = None
+                display_mana_spent = spell_mana
 
         timed_out = self._lethal_budget_expired()
 
@@ -3724,7 +3843,7 @@ class LethalChecker:
                 available_mana -= actual_cost
 
         # 判断是否有斩杀（吸血嘲讽、亡语加甲抬高有效血量；英雄圣盾在场面伤害里已计）
-        opp_effective_hp = self.get_opponent_effective_hp()
+        opp_effective_hp = self._lethal_threshold_hp()
         board_only = sum(s.damage for s in damage_sources if s.source_type == "board")
         other_hits = [s.damage for s in damage_sources if s.source_type != "board"]
         if opp_shield and board_only <= 0 and other_hits:

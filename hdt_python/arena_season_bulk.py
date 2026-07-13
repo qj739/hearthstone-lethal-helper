@@ -446,9 +446,10 @@ def _make_spell_apply(spec: _SpellSpec) -> Callable:
     if kind == "all_minions_aoe":
         return _all_minions_aoe(amt)
     if kind == "all_enemies":
+        _sd = sb.scaled_spell_damage
         def _all_en(t, f, *, mult, enemy_shield, spell_power=0, **_kw):
             return _apply_all_enemies_damage(
-                t, f, amt * mult, enemy_shield=enemy_shield, spell_power=spell_power,
+                t, f, _sd(amt, mult=mult, spell_power=spell_power), enemy_shield=enemy_shield,
             )
         return _all_en
     if kind == "all_other_minions":

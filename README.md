@@ -4,7 +4,7 @@
 
 [中文](#中文) | [English](#english)
 
-**📥 [下载 Windows 版 EXE](https://github.com/qj739/hearthstone-lethal-helper/releases/download/v1.0.0/HS-Lethal-Helper.exe)** · **🎬 [观看功能演示视频](https://github.com/qj739/hearthstone-lethal-helper/raw/main/assets/demo/arena-lethal-demo.mp4)**
+**📥 [下载 Windows 版 EXE](https://github.com/qj739/hearthstone-lethal-helper/releases/download/v1.0.1/HS-Lethal-Helper.exe)** · **🎬 [观看功能演示视频](https://github.com/qj739/hearthstone-lethal-helper/raw/main/assets/demo/arena-lethal-demo.mp4)**
 
 ---
 
@@ -30,7 +30,7 @@
 
 | | |
 |---|---|
-| **Windows 免安装版** | [HS-Lethal-Helper.exe](https://github.com/qj739/hearthstone-lethal-helper/releases/download/v1.0.0/HS-Lethal-Helper.exe)（解压即用，首次运行后重启炉石） |
+| **Windows 免安装版** | [HS-Lethal-Helper.exe](https://github.com/qj739/hearthstone-lethal-helper/releases/download/v1.0.1/HS-Lethal-Helper.exe)（解压即用，首次运行后重启炉石） |
 | **功能演示视频** | [arena-lethal-demo.mp4](https://github.com/qj739/hearthstone-lethal-helper/raw/main/assets/demo/arena-lethal-demo.mp4) |
 
 EXE 浮层顶部菜单栏点击 **「设置」** 即可打开配置面板；右上角 **×** 可隐藏浮层。
@@ -150,7 +150,7 @@ HS/
 
 | | |
 |---|---|
-| **Windows build** | [HS-Lethal-Helper.exe](https://github.com/qj739/hearthstone-lethal-helper/releases/download/v1.0.0/HS-Lethal-Helper.exe) (no install; restart Hearthstone after first run) |
+| **Windows build** | [HS-Lethal-Helper.exe](https://github.com/qj739/hearthstone-lethal-helper/releases/download/v1.0.1/HS-Lethal-Helper.exe) (no install; restart Hearthstone after first run) |
 | **Demo video** | [arena-lethal-demo.mp4](https://github.com/qj739/hearthstone-lethal-helper/raw/main/assets/demo/arena-lethal-demo.mp4) |
 
 Open **Settings** from the overlay menu bar; click **×** (top-right) to hide the overlay.

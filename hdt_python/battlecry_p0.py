@@ -33,7 +33,9 @@ from .spell_board import (
     _iter_spell_minion_target_indices,
     _living_enemy_board_minions,
     _living_enemy_taunts,
+    _apply_buff_to_spell_target,
     _merge_spell_result,
+    _pick_best_spell_target_fighter,
     _pick_lowest_unit,
     _remove_dead_taunts,
     _snapshot_health,
@@ -841,6 +843,60 @@ def _apply_sharpclaw(t, f, *, mult, **_kw) -> SpellApplyResult:
     return SpellApplyResult()
 
 
+def _grant_rush_on_buff_target(
+    fighters: List[dict],
+    picked: tuple,
+) -> None:
+    """战吼赋予突袭：可调度的随从获得 1 次攻击（不能打脸，除非原本就能打脸）。"""
+    src, key, _unit = picked
+    if src != "fighter":
+        return
+    i = int(key)
+    fighters[i] = dict(fighters[i])
+    fighters[i]["rush"] = True
+    if fighters[i].get("attacks_left", 0) <= 0 and not fighters[i].get("charge"):
+        fighters[i]["attacks_left"] = 1
+        if not fighters[i].get("can_face", False):
+            fighters[i]["can_face"] = False
+
+
+def _apply_defias_smuggler(
+    t,
+    f,
+    *,
+    mult,
+    card=None,
+    gs=None,
+    player_id=None,
+    **_kw,
+) -> SpellApplyResult:
+    """迪菲亚私运者：战吼使一个友方随从 +2 攻并获得突袭（预备费由 hand_minion_cost 处理）。"""
+    before_ids = {
+        u.get("entity_id")
+        for u in f
+        if u.get("kind") == "minion" and u.get("health", 0) > 0
+    }
+    _summon_friendly_fighter(f, 3 * mult, 3 * mult, card_id="JAIL_998")
+    if not before_ids:
+        return SpellApplyResult()
+    picked = _pick_best_spell_target_fighter(f, gs=gs, player_id=player_id)
+    if picked is None:
+        return SpellApplyResult()
+    src, key, unit = picked
+    if src == "fighter" and unit.get("entity_id") not in before_ids:
+        return SpellApplyResult()
+    if src == "board" and key not in before_ids:
+        return SpellApplyResult()
+    _apply_buff_to_spell_target(
+        f,
+        picked,
+        bonus_atk=2 * mult,
+        bonus_health=0,
+    )
+    _grant_rush_on_buff_target(f, picked)
+    return SpellApplyResult()
+
+
 def _apply_ogrillon(t, f, *, mult, enemy_shield, **_kw) -> SpellApplyResult:
     """屠戮者奥格拉：受伤随从数 → +1/+1，对所有敌人攻击。"""
     n = _count_damaged_minions(t, f)
@@ -950,6 +1006,7 @@ def _register_p0_battlecry() -> None:
         (("ICC_705",), 7, "骨魇", _apply_bonemare, False),
         (("TOY_513",), 4, "沙画元素", _apply_sand_elemental, False),
         (("AV_294",), 2, "怒爪精锐", _apply_sharpclaw, False),
+        (("JAIL_998",), 3, "迪菲亚私运者", _apply_defias_smuggler, False),
         (("REV_934",), 6, "屠戮者奥格拉", _apply_ogrillon, False),
         (("GDB_855",), 8, "吞星兽", _apply_star_eater, False),
         (("EDR_464",), 7, "泰兰德", _apply_tyrande, False),

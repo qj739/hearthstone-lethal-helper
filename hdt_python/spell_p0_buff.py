@@ -197,6 +197,30 @@ def _apply_reliable_companion(
     return SpellApplyResult()
 
 
+def _apply_spikeridged_steed(
+    taunts,
+    fighters,
+    *,
+    mult,
+    enemy_shield,
+    spell_power=0,
+    gs=None,
+    player_id=None,
+    **_kw,
+) -> SpellApplyResult:
+    """剑龙骑术：使一个随从获得 +2/+6 和嘲讽（亡语召唤剑龙 v1 不模拟）。"""
+    picked = _pick_best_spell_target_fighter(fighters, gs=gs, player_id=player_id)
+    if picked is None:
+        return SpellApplyResult()
+    _apply_buff_to_spell_target(
+        fighters,
+        picked,
+        bonus_atk=_sd(2, mult=mult, spell_power=spell_power),
+        bonus_health=_sd(6, mult=mult, spell_power=spell_power),
+    )
+    return SpellApplyResult()
+
+
 def _apply_banana_bunch(
     taunts,
     fighters,
@@ -240,6 +264,7 @@ def _register_p0_buff() -> None:
         (("CATA_138",), 3, "森林赠礼", _apply_forests_gift, False),
         (("WW_027",), 2, "可靠陪伴", _apply_reliable_companion, False),
         (("MAW_021", "CORE_MAW_021"), 3, "问心无愧", _apply_reliable_companion, False),
+        (("CORE_UNG_952", "UNG_952"), 5, "剑龙骑术", _apply_spikeridged_steed, False),
         (("TOY_716",), 4, "光速抢购", _apply_flash_sale, False),
         (("ETC_717", "ETC_717t"), 2, "悦耳嘻哈", _apply_hip_hop, False),
         (("ETC_201", "ETC_201t", "ETC_201t2"), 1, "一串香蕉", _apply_banana_bunch, False),

@@ -455,7 +455,7 @@ class HearthstoneTracker:
         board_minion = max(0, minion_board - hand_charge_face)
 
         cfg = self.overlay_settings
-        opp_total = self.lethal_checker.get_opponent_effective_hp()
+        opp_total = self.lethal_checker._lethal_threshold_hp()
         lines = []
 
         extras = []

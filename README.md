@@ -119,6 +119,7 @@ HS/
 ### 相关文档
 
 - [docs/HDT_PYTHON_README.md](docs/HDT_PYTHON_README.md) — 完整使用说明
+- [docs/SUPPORTED_CARDS.md](docs/SUPPORTED_CARDS.md) — **已支持卡牌总表（718 张，中英描述）**
 - [docs/README_INDEX.md](docs/README_INDEX.md) — 文档索引
 - [docs/IMPROVEMENTS.md](docs/IMPROVEMENTS.md) — 技术改进记录
 
@@ -239,6 +240,7 @@ Like HDT, **borderless windowed** display mode gives the most reliable overlay b
 ### Further Reading
 
 - [docs/HDT_PYTHON_README.md](docs/HDT_PYTHON_README.md) — full usage guide (Chinese)
+- [docs/SUPPORTED_CARDS.md](docs/SUPPORTED_CARDS.md) — **supported cards catalog (718 entries, EN/ZH)**
 - [docs/README_INDEX.md](docs/README_INDEX.md) — documentation index
 - [docs/IMPROVEMENTS.md](docs/IMPROVEMENTS.md) — technical improvement notes
 

@@ -33,6 +33,7 @@ python hdt_tracker.py
 | 文档 | 用途 | 适合人群 |
 |------|------|---------|
 | **HDT_PYTHON_README.md** | 完整使用指南 | 所有用户 ⭐ |
+| **SUPPORTED_CARDS.md** | **已支持卡牌总表（中英名/费用/描述）** | 查卡池覆盖 ⭐ |
 | **IMPROVEMENTS.md** | 改进总结 | 想了解技术细节 |
 | **TAUNT_ALGORITHM.md** | 嘲讽算法详解 | 算法爱好者 |
 

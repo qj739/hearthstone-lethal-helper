@@ -116,6 +116,12 @@ def _dragon_race_value(tags: dict) -> object:
     )
 
 
+# cards.json 未收录的已知野兽 token（如鼠吻贮藏者 JAIL_877t）
+_KNOWN_BEAST_CARD_IDS = frozenset({
+    "JAIL_877t",
+})
+
+
 def entity_is_dragon(entity) -> bool:
     """随从实体是否为龙（CARDRACE / DRAGON 标签）。"""
     if entity is None:
@@ -124,6 +130,51 @@ def entity_is_dragon(entity) -> bool:
     if tags.get("DRAGON"):
         return True
     return _dragon_race_value(tags) in ("DRAGON", 24)
+
+
+@lru_cache(maxsize=4096)
+def card_id_is_beast(card_id: str) -> bool:
+    """cards.json 牌面种族是否为野兽。"""
+    if not card_id:
+        return False
+    if card_id in _KNOWN_BEAST_CARD_IDS:
+        return True
+    cards_path = resource_path("json", "cards.json")
+    if not cards_path.is_file():
+        return False
+    try:
+        with open(cards_path, encoding="utf-8") as f:
+            for card in json.load(f):
+                if card.get("id") == card_id:
+                    race = card.get("race") or ""
+                    races = card.get("races") or []
+                    return race == "BEAST" or "BEAST" in races
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return False
+    return False
+
+
+def entity_is_beast(entity) -> bool:
+    """随从实体是否为野兽（CARDRACE / BEAST 标签）。"""
+    if entity is None:
+        return False
+    tags = getattr(entity, "tags", {}) or {}
+    if tags.get("BEAST"):
+        return True
+    return _dragon_race_value(tags) in ("BEAST", 20)
+
+
+def unit_is_beast(unit: dict) -> bool:
+    """模拟场面 dict 是否为野兽。"""
+    if unit.get("beast"):
+        return True
+    tags = unit.get("tags") or {}
+    if tags.get("BEAST"):
+        return True
+    race = unit.get("cardrace") or _dragon_race_value(tags)
+    if race in ("BEAST", 20):
+        return True
+    return card_id_is_beast(unit.get("card_id") or "")
 
 
 def unit_is_dragon(unit: dict) -> bool:
@@ -879,9 +930,16 @@ def _friendly_spell_target_minions(
     for i, f in enumerate(fighters):
         if f.get("kind") != "minion" or f.get("health", 0) <= 0:
             continue
-        if f.get("spell_immune"):
-            continue
         eid = f.get("entity_id")
+        if f.get("spell_immune"):
+            if eid is not None:
+                seen.add(eid)
+            continue
+        if gs is not None and eid is not None:
+            ent = gs.entities.get(eid)
+            if ent is not None and entity_spell_immune(ent, gs):
+                seen.add(eid)
+                continue
         if eid is not None:
             seen.add(eid)
         out.append(("fighter", i, f))
@@ -890,11 +948,12 @@ def _friendly_spell_target_minions(
             eid = m.entity_id
             if eid in seen or m.current_health <= 0:
                 continue
-            if entity_spell_immune(m):
+            if entity_spell_immune(m, gs):
                 continue
             atk = effective_attack_from_tags(m.tags)
             if atk <= 0 and m.atk > 0:
                 atk = m.atk
+            immune = entity_spell_immune(m, gs)
             out.append(("board", eid, {
                 "kind": "minion",
                 "entity_id": eid,
@@ -902,7 +961,7 @@ def _friendly_spell_target_minions(
                 "atk": atk,
                 "health": m.current_health,
                 "shield": m.tags.get("DIVINE_SHIELD", 0) == 1,
-                "spell_immune": False,
+                "spell_immune": immune,
                 "attacks_left": 1,
                 "can_face": True,
             }))
@@ -1421,7 +1480,7 @@ def hand_effect_active(
 ) -> bool:
     """手牌亮边（POWERED_UP）或连击已触发（本回合已出牌 / 模拟序列内先出牌）。"""
     if card is None:
-        return False
+        return combo_active
     if card.tags.get("POWERED_UP") == 1:
         return True
     cid = card.card_id or ""

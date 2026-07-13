@@ -14,6 +14,7 @@ from .spell_board import (
     BoardSpellDef,
     SpellApplyResult,
     hand_effect_active,
+    _apply_damage,
     _apply_random_destroy_enemy_minions,
     _destroy_enemy_minion,
     _lethal_target_enemy_minions,
@@ -618,6 +619,65 @@ def _apply_consume_magic(taunts, fighters, *, mult, enemy_shield, **_kw,) -> Spe
     return _apply_optimal_silence_enemy(taunts, fighters, enemy_shield=enemy_shield)
 
 
+def _apply_deafen(
+    taunts: List[dict],
+    fighters: List[dict],
+    *,
+    mult: int,
+    enemy_shield: bool,
+    card=None,
+    combo_active: bool = False,
+    gs=None,
+    player_id: Optional[int] = None,
+    **_kw,
+) -> SpellApplyResult:
+    """致聋术 JAM_022：沉默一个敌方随从；连击并对其造成 2 点伤害。"""
+    living = _lethal_target_enemy_minions(taunts)
+    if not living:
+        return SpellApplyResult()
+
+    combo = hand_effect_active(
+        card, combo_active=combo_active, gs=gs, player_id=player_id,
+    )
+    dmg = _sd(2, mult=mult) if combo else 0
+    best_score = -1
+    best_eid = None
+    best_heal = 0
+
+    for t in living:
+        ts = deepcopy(taunts)
+        fs = deepcopy(fighters)
+        target = next(
+            (x for x in ts if x.get("entity_id") == t.get("entity_id")),
+            None,
+        )
+        if target is None:
+            continue
+        _strip_enemy_minion_keywords(target)
+        heal = 0
+        if dmg > 0:
+            heal = _apply_damage(target, dmg, taunts=ts, fighters=fs)
+        _remove_dead_taunts(ts)
+        score = _score_board_face(ts, fs, enemy_shield)
+        if score > best_score:
+            best_score = score
+            best_eid = t.get("entity_id")
+            best_heal = heal
+
+    if best_eid is None:
+        return SpellApplyResult()
+
+    for unit in taunts:
+        if unit.get("entity_id") == best_eid:
+            _strip_enemy_minion_keywords(unit)
+            heal = best_heal
+            if dmg > 0:
+                heal = _apply_damage(unit, dmg, taunts=taunts, fighters=fighters)
+            _remove_dead_taunts(taunts)
+            return SpellApplyResult(opponent_lifesteal_heal=heal)
+    return SpellApplyResult()
+
+
 def _apply_cannibalize(taunts, fighters, *, mult, enemy_shield, card=None, **_kw,) -> SpellApplyResult:
     """野蛮残食：消灭一个随从，为友方角色恢复等同于其生命值的生命。"""
     killed = _apply_optimal_destroy_any_minion(
@@ -707,6 +767,7 @@ def _register_p0_remove() -> None:
         (("TIME_712",), 7, "诛灭暴君", _apply_dethrone, False, None),
         (("CORE_EX1_246",), 3, "妖术", _apply_hex, False, None),
         (("BT_490",), 1, "吞噬魔法", _apply_consume_magic, False, None),
+        (("JAM_022",), 1, "致聋术", _apply_deafen, False, None),
         (("TIME_433",), 3, "抹除存在", _apply_cease_to_exist, True, None),
         (("CFM_696",), 2, "衰变", _apply_devolve, False, None),
         (("CORE_RLK_087",), 3, "窒息", _apply_asphyxiate, False, None),

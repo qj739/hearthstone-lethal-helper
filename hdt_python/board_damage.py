@@ -325,12 +325,33 @@ def living_taunt_minions(
     ]
 
 
-def entity_spell_immune(entity: "Entity") -> bool:
-    """无法被法术/英雄技能指定（Elusive / CANNOT_BE_TARGETED_BY_SPELLS）。"""
+# 黑暗之赐等附魔：+2/+2 扰魔（日志有时只写在附魔实体上）
+_SPELL_IMMUNE_ENCHANTMENT_IDS = frozenset({
+    "EDR_100t1e",
+})
+
+
+def entity_spell_immune(
+    entity: "Entity",
+    gs: Optional["GameState"] = None,
+) -> bool:
+    """无法被法术/英雄技能指定（Elusive / CANNOT_BE_TARGETED_BY_SPELLS / 扰魔附魔）。"""
     if _tag(entity, "ELUSIVE") == 1:
         return True
     if _tag(entity, "CANNOT_BE_TARGETED_BY_SPELLS") == 1:
         return True
+    if gs is None or not getattr(entity, "entity_id", None):
+        return False
+    eid = int(entity.entity_id)
+    for e in gs.entities.values():
+        if entity_cardtype(e) != "ENCHANTMENT":
+            continue
+        if int(e.tags.get("ATTACHED", 0) or 0) != eid:
+            continue
+        if _tag(e, "ELUSIVE") == 1 or _tag(e, "CANNOT_BE_TARGETED_BY_SPELLS") == 1:
+            return True
+        if (e.card_id or "") in _SPELL_IMMUNE_ENCHANTMENT_IDS:
+            return True
     return False
 
 
@@ -1117,7 +1138,9 @@ class PlayerBoardView:
 
     def face_hit_damages(self) -> List[int]:
         """无嘲讽时每次打脸攻击的伤害列表（用于圣盾模拟）"""
-        from .secret_attack_board import minion_face_hits_with_crusader, player_has_crusader_aura
+        from .secret_attack_board import player_has_crusader_aura, stamp_crusader_aura_on_fighter
+        from .rush_combat import stamp_fighter_attack_effects, simulate_minion_face_hits
+        from .spell_board import entity_is_beast
 
         hits: List[int] = []
         secret_active = False
@@ -1140,8 +1163,11 @@ class PlayerBoardView:
                     hits.append(w_atk)
             elif self.hero.attack > 0:
                 hits.append(self.hero.attack)
+        minion_fighters: List[dict] = []
         for card in self.cards:
-            if not card.entity.is_minion or not card.can_attack_hero:
+            if not card.entity.is_minion:
+                continue
+            if not card.can_attack_minion and not card.can_attack_hero:
                 continue
             std = card.std_attack
             if std <= 0:
@@ -1152,11 +1178,24 @@ class PlayerBoardView:
                 if self.active_turn else 0
             )
             remaining = max(per_turn - used, 0)
-            hits.extend(
-                minion_face_hits_with_crusader(
-                    std, remaining, secret_active=secret_active,
-                )
-            )
+            if remaining <= 0:
+                continue
+            cid = card.entity.card_id or ""
+            fighter = {
+                "kind": "minion",
+                "entity_id": card.entity.entity_id,
+                "card_id": cid,
+                "atk": std,
+                "health": max(card.entity.current_health, 1),
+                "attacks_left": remaining,
+                "can_face": card.can_attack_hero,
+                "beast": entity_is_beast(card.entity),
+            }
+            stamp_fighter_attack_effects(fighter, cid)
+            if self.game_state is not None and self.player_id is not None:
+                stamp_crusader_aura_on_fighter(fighter, self.game_state, self.player_id)
+            minion_fighters.append(fighter)
+        hits.extend(simulate_minion_face_hits(minion_fighters, secret_active=secret_active))
         return hits
 
     def face_attack_damage_no_taunt(self, defender_has_divine_shield: bool = False) -> int:

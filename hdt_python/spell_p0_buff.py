@@ -233,7 +233,7 @@ def _apply_banana_bunch(
     player_id=None,
     **_kw,
 ) -> SpellApplyResult:
-    """一串香蕉：友方随从 +1/+1，回手可再打（共 3 根）。"""
+    """一串香蕉：友方随从 +1/+1，回手可再打（共 3 根）；跳过魔法免疫/扰魔友方。"""
     from .spell_board import DRINKS_LEFT
 
     picked = _pick_best_spell_target_fighter(fighters, gs=gs, player_id=player_id)

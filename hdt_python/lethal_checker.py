@@ -37,6 +37,7 @@ from .spell_board import (
     spell_effect_multiplier,
     total_spell_power,
     entity_is_dragon,
+    entity_is_beast,
     SpellApplyResult,
     spell_sequence_transposition_key,
     get_board_spell_def,
@@ -3902,7 +3903,9 @@ class LethalChecker:
                     "shield": card.entity.tags.get("DIVINE_SHIELD", 0) == 1,
                     "poisonous": self._has_poisonous(card.entity),
                     "lifesteal": self._has_lifesteal(card.entity),
-                    "spell_immune": entity_spell_immune(card.entity),
+                    "spell_immune": entity_spell_immune(
+                        card.entity, self.game_state,
+                    ),
                     "attacks_left": 0,
                     "can_face": card.can_attack_hero,
                     "rush": card.entity.tags.get("RUSH", 0) == 1,
@@ -3912,6 +3915,7 @@ class LethalChecker:
                     "stolen_turn": stolen_turn,
                 }
                 fighter["dragon"] = entity_is_dragon(card.entity)
+                fighter["beast"] = entity_is_beast(card.entity)
                 from .damaged_spell_power import fighter_spell_power_from_entity
 
                 fighter["damage"] = int(card.entity.damage or 0)
@@ -3978,12 +3982,21 @@ class LethalChecker:
     @staticmethod
     def _fighters_face_hits(fighters: List[dict]) -> List[int]:
         from .combat_sim import _friendly_taunt_blocks_face, _normalize_fighters
+        from .rush_combat import simulate_minion_face_hits
 
         normed = _normalize_fighters(fighters)
         if _friendly_taunt_blocks_face(normed):
             return []
         hits: List[int] = []
+        minion_fs: List[dict] = []
         for f in normed:
+            if f.get("kind") == "minion":
+                if f.get("health", 0) <= 0 or f.get("attacks_left", 0) <= 0:
+                    continue
+                if not f.get("can_face", True):
+                    continue
+                minion_fs.append(f)
+                continue
             if not f.get("can_face", True):
                 continue
             attacks_left = f.get("attacks_left", 0)
@@ -3993,14 +4006,9 @@ class LethalChecker:
                 n = min(attacks_left, f.get("durability", 0))
             else:
                 n = attacks_left
-            from .secret_attack_board import crusader_strike_attack, apply_crusader_buff_after_strike
-
-            running_atk = f["atk"]
             for _ in range(n):
-                strike_f = {**f, "atk": running_atk}
-                hits.append(crusader_strike_attack(strike_f))
-                apply_crusader_buff_after_strike(strike_f)
-                running_atk = strike_f["atk"]
+                hits.append(f["atk"])
+        hits.extend(simulate_minion_face_hits(minion_fs))
         return hits
 
     @staticmethod
@@ -4043,7 +4051,7 @@ class LethalChecker:
             "shield": entity.tags.get("DIVINE_SHIELD", 0) == 1,
             "poisonous": LethalChecker._has_poisonous(entity),
             "lifesteal": LethalChecker._has_lifesteal(entity),
-            "spell_immune": entity_spell_immune(entity),
+            "spell_immune": entity_spell_immune(entity, gs),
             "taunt": entity_has_taunt(entity, gs),
             "card_id": entity.card_id or "",
             "cost": int(getattr(entity, "cost", 0) or entity.tags.get("COST", 0) or 0),

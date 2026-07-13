@@ -10,6 +10,9 @@ from .spell_board import _add_temp_hero_attack
 if TYPE_CHECKING:
     from .lethal_checker import LethalChecker
 
+# 影犬及注能 token：攻击后使其他野兽 +2/+2
+SHADEHOUND_CARD_IDS = frozenset({"MAW_009", "MAW_009t"})
+
 # 场面随从 card_id → 攻击特效（打出时另由 rush_p0 写入 infused cleave 等）
 BOARD_ATTACK_EFFECTS = {
     "CS3_020": {"mirrors_hero_attack": True},
@@ -19,6 +22,8 @@ BOARD_ATTACK_EFFECTS = {
     "BT_487": {"attack_again_on_kill": True},
     "WW_418": {"ogre_misdirect": True},
     "JAM_004": {"cleave": True},
+    "MAW_009": {"buff_other_beasts_on_attack": (2, 2)},
+    "MAW_009t": {"buff_other_beasts_on_attack": (2, 2)},
 }
 
 
@@ -27,6 +32,8 @@ def stamp_fighter_attack_effects(fighter: dict, card_id: str = "", *, infused_cl
     cid = card_id or fighter.get("card_id") or ""
     fighter["card_id"] = cid
     effects = BOARD_ATTACK_EFFECTS.get(cid, {})
+    if not effects.get("buff_other_beasts_on_attack") and cid in SHADEHOUND_CARD_IDS:
+        effects = {**effects, "buff_other_beasts_on_attack": (2, 2)}
     if effects.get("mirrors_hero_attack"):
         fighter["mirrors_hero_attack"] = True
     if effects.get("hero_atk_on_attack"):
@@ -41,6 +48,83 @@ def stamp_fighter_attack_effects(fighter: dict, card_id: str = "", *, infused_cl
         fighter["cleave"] = True
     if effects.get("mana_restore_on_attack"):
         fighter["mana_restore_on_attack"] = True
+    if effects.get("buff_other_beasts_on_attack"):
+        fighter["buff_other_beasts_on_attack"] = effects["buff_other_beasts_on_attack"]
+
+
+def apply_buff_other_beasts_after_attack(attacker: dict, fighters: List[dict]) -> None:
+    """影犬等：攻击后使其他友方野兽 +2/+2。"""
+    buff = attacker.get("buff_other_beasts_on_attack")
+    if not buff:
+        return
+    atk_eid = attacker.get("entity_id")
+    atk_bonus, hp_bonus = buff
+    from .spell_board import unit_is_beast
+
+    for f in fighters:
+        if f.get("kind") != "minion" or f.get("health", 0) <= 0:
+            continue
+        if atk_eid is not None and f.get("entity_id") == atk_eid:
+            continue
+        if not unit_is_beast(f):
+            continue
+        f["atk"] = int(f.get("atk", 0) or 0) + atk_bonus
+        f["health"] = int(f.get("health", 0) or 0) + hp_bonus
+
+
+def _face_hit_sort_key(f: dict) -> tuple:
+    """影犬优先攻击，最大化友方野兽打脸。"""
+    if f.get("buff_other_beasts_on_attack"):
+        return (0, 0)
+    if f.get("kind") == "minion":
+        from .spell_board import unit_is_beast
+
+        return (1 if unit_is_beast(f) else 2, 0)
+    return (3, 0)
+
+
+def simulate_minion_face_hits(
+    fighters: List[dict],
+    *,
+    secret_active: bool = False,
+) -> List[int]:
+    """无嘲讽时随从打脸伤害列表（十字军光环 + 影犬攻击后 buff）。"""
+    from .secret_attack_board import crusader_strike_attack, apply_crusader_buff_after_strike
+
+    hits: List[int] = []
+    # 突袭影犬等：当回合不能打脸，但解场攻击仍会 buff 其他野兽
+    for f in fighters:
+        if not f.get("buff_other_beasts_on_attack"):
+            continue
+        if f.get("health", 0) <= 0 or f.get("attacks_left", 0) <= 0:
+            continue
+        if f.get("can_face", True):
+            continue
+        for _ in range(f.get("attacks_left", 0)):
+            apply_buff_other_beasts_after_attack(f, fighters)
+
+    face_fighters = [
+        f for f in fighters
+        if f.get("can_face", True)
+        and f.get("health", 0) > 0
+        and f.get("attacks_left", 0) > 0
+    ]
+    ordered = sorted(face_fighters, key=_face_hit_sort_key)
+    for f in ordered:
+        n = f.get("attacks_left", 1)
+        running_atk = int(f.get("atk", 0) or 0)
+        for _ in range(n):
+            strike_f = {**f, "atk": running_atk}
+            if secret_active:
+                strike_f["crusader_aura_on_attack"] = True
+            elif f.get("crusader_aura_on_attack"):
+                strike_f["crusader_aura_on_attack"] = True
+            hits.append(crusader_strike_attack(strike_f))
+            apply_crusader_buff_after_strike(strike_f)
+            running_atk = int(strike_f.get("atk", 0) or 0)
+            f["atk"] = running_atk
+            apply_buff_other_beasts_after_attack(f, fighters)
+    return hits
 
 
 def fighters_need_random_attacks(fighters: List[dict]) -> bool:
@@ -153,6 +237,8 @@ def after_minion_attack(
         and was_alive_before
     ):
         fighter["attacks_left"] = fighter.get("attacks_left", 0) + 1
+
+    apply_buff_other_beasts_after_attack(fighter, fighters)
 
     return extra_heal
 

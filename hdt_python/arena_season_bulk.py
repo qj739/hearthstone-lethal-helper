@@ -53,7 +53,6 @@ _SPELL_OVERRIDES: Dict[str, _SpellSpec] = {
     "ETC_305": _SpellSpec("destroy_weak", 5),
     "CORE_CS2_108": _SpellSpec("destroy_damaged_enemy"),
     "VAC_460": _SpellSpec("face_direct", 2, note="连击铸币v1不计"),
-    "JAM_022": _SpellSpec("minion_direct", 2, note="沉默+连击2伤"),
     "DEEP_011": _SpellSpec("minion_direct", 2),
     "CORE_BOT_222": _SpellSpec("minion_direct", 4, note="同时打英雄v1仅随从"),
     "TOY_640": _SpellSpec("minion_direct", 5, note="邻接溢出v1单目标"),

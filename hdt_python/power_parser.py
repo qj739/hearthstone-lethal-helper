@@ -1347,8 +1347,8 @@ class PowerLogParser(LogWatcher):
 
         if int_value is not None:
             entity.tags[tag] = int_value
-        elif not value.isdigit():
-            pass
+        elif value:
+            entity.tags[tag] = value
 
         # 应用特定标签
         if tag == "ZONE":

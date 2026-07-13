@@ -1993,7 +1993,7 @@ def test_p0_remove_spells_registered():
     from hdt_python.spell_board import get_board_spell_def
 
     ids = [
-        "MIS_903", "TIME_712", "CORE_EX1_246", "BT_490", "TIME_433", "CFM_696",
+        "MIS_903", "TIME_712", "CORE_EX1_246", "BT_490", "JAM_022", "TIME_433", "CFM_696",
         "CORE_RLK_087", "TTN_932", "DMF_117", "DMF_117t", "DMF_117t2",
         "CORE_EX1_309", "CATA_203", "NX2_020", "CATA_306", "REV_239",
         "CATA_479", "SW_441", "SCH_235",

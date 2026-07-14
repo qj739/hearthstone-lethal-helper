@@ -287,13 +287,18 @@ def _living_enemy_taunts(taunts: List[dict]) -> List[dict]:
 
 
 def _spell_blocking_taunts(taunts: List[dict]) -> List[dict]:
-    """阻挡法术打脸的嘲讽（魔法免疫/Elusive 嘲不阻挡法术选脸）。"""
+    """存活的非魔免嘲讽随从（仅供调试/列举；嘲讽不阻挡法术选脸）。"""
     return [t for t in _living_enemy_taunts(taunts) if not t.get("spell_immune")]
 
 
 def _can_spell_hit_enemy_face(taunts: List[dict]) -> bool:
-    """无（非魔免）嘲讽阻挡时，单体法术方可对敌方英雄造成直伤。"""
-    return not _spell_blocking_taunts(taunts)
+    """指向性法术可否对敌方英雄造成直伤。
+
+    炉石规则：嘲讽只限制攻击目标，不阻止法术/英雄技能选脸。
+    （须指定「敌方随从」的牌走 `_apply_targeted_minion` 等分支，不会调用本函数。）
+    """
+    _ = taunts
+    return True
 
 
 # 表一「清场指向性法术」：无嘲讽时可遍历敌方随从（见 CLEAR_TARGETED_SPELL_TABLE.md）
@@ -562,8 +567,9 @@ def _apply_optimal_single_target_damage(
     **_kw,
 ):
     """
-    可选目标「造成 N 点伤害」：斩杀模拟仅考虑「打脸（无嘲讽时）」或「点嘲讽随从」。
-    在嘲讽与各嘲讽随从之间选「法术直伤 + 解嘲后随从打脸」最大的目标。
+    可选目标「造成 N 点伤害」：斩杀模拟考虑「打脸」或「点嘲讽随从」
+   （无嘲讽时默认不点非嘲讽随从，见 `_iter_spell_minion_target_indices`）。
+    在脸与各可点嘲讽之间选「法术直伤 + 解嘲后随从打脸」最大的目标。
     return_primary_key=True 时返回 (SpellApplyResult, primary_target_key)。
     """
     amount = max(damage, 0)
@@ -1700,6 +1706,9 @@ _SPELL_SIM_TIER_OVERRIDES: Dict[str, SpellSimTier] = {
     "CORE_CS2_062": SpellSimTier.CLEAR_BOARD, # 地狱烈焰
     "LOOT_417": SpellSimTier.CLEAR_BOARD,     # 大灾变
     "CORE_CS2_093": SpellSimTier.CLEAR_BOARD, # 奉献
+    # 生而平等须与奉献等同层，才能枚举「平等→AOE」；放 UTILITY 会被固定成先 AOE 后平等
+    "CORE_EX1_619": SpellSimTier.CLEAR_BOARD,
+    "EX1_619": SpellSimTier.CLEAR_BOARD,
     "TTN_853": SpellSimTier.CLEAR_BOARD,      # 审判恶徒
     "EDR_476": SpellSimTier.CLEAR_BOARD,      # 月亮井
     "CORE_EDR_476": SpellSimTier.CLEAR_BOARD,

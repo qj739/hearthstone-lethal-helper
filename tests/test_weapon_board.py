@@ -8,7 +8,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from hdt_python.power_parser import GameState
 from hdt_python.lethal_checker import LethalChecker
-from hdt_python.board_damage import hero_weapon_strike_damage, hero_can_attack_with_weapon
+from hdt_python.board_damage import (
+    INFINITE_ATK,
+    hero_weapon_strike_damage,
+    hero_can_attack_with_weapon,
+    hero_weapon_can_face,
+)
 
 
 def _hero(gs, eid, pid, *, atk479=None):
@@ -237,8 +242,9 @@ def test_opp_turn_hammer_muncher_board_floor():
     face = checker.overlay_board_face_damage()
     pure, minion_bd, weapon_bd, spell, hp = checker.overlay_board_breakdown()
     assert weapon_bd == 3, weapon_bd
+    # 5 随从 + 3 武器 + 5 回合结束；ET 进 total，不并入 minion_bd
     assert face >= 13, f"expected >=13 (5+3+5 et), got {face} bd={minion_bd}/{weapon_bd}/{spell}"
-    assert minion_bd >= 10, minion_bd
+    assert minion_bd >= 5, minion_bd
     print("OK opp turn hammer+muncher", face, pure, minion_bd, weapon_bd)
 
 
@@ -261,6 +267,119 @@ def test_equipped_hammer_stamps_after_attack_buff():
     print("OK equipped hammer after-attack meta", weapon_f.get("buff_friendly_stats_after"))
 
 
+def test_hand_of_infinity_cannot_face():
+    """无穷之手：无穷攻可解场，但场攻/斩杀不得把武器伤计入打脸。"""
+    from hdt_python.spell_board import apply_spell_sequence
+    from hdt_python.weapon_board import get_weapon_def
+
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.active_player_id = 1
+    gs.in_game = True
+    hero = _hero(gs, 1, 1, atk479=0)
+    _hero(gs, 2, 2)
+    gs.get_entity(2).health = 30
+    _weapon(gs, 40, 1, card_id="END_012", atk=INFINITE_ATK, dur=2)
+    hero.tags["CANNOT_ATTACK_HEROES"] = 1
+    hero.tags["ATK"] = INFINITE_ATK
+    hero.tags["479"] = INFINITE_ATK
+
+    assert not hero_weapon_can_face(hero, gs.get_weapon(1))
+    board = gs.get_overlay_board(1)
+    assert board.hero_damage == 0, board.hero_damage
+
+    checker = LethalChecker(gs)
+    fighters = checker._build_fighters(board, 1)
+    weapon_f = next(f for f in fighters if f.get("kind") == "weapon")
+    assert weapon_f.get("can_face") is False
+    assert weapon_f.get("atk") == INFINITE_ATK
+    face = checker.overlay_board_face_damage()
+    _, _, weapon_bd, _, _ = checker.overlay_board_breakdown()
+    assert weapon_bd == 0, weapon_bd
+    assert face == 0, face
+
+    # 有嘲讽时：武器可参与清场，但清完后仍不能打脸
+    _minion(gs, 20, 2, 2, 5)
+    gs.get_entity(20).tags["TAUNT"] = 1
+    checker2 = LethalChecker(gs)
+    face2 = checker2.overlay_board_face_damage()
+    _, _, weapon_bd2, _, _ = checker2.overlay_board_breakdown()
+    assert weapon_bd2 == 0, weapon_bd2
+    assert face2 == 0, face2
+
+    # 手牌打出模拟：同样 can_face=False
+    defn = get_weapon_def("END_012")
+    assert defn is not None
+    fs: list = []
+    apply_spell_sequence([], fs, [(defn, 3, None)])
+    w = next(f for f in fs if f.get("kind") == "weapon")
+    assert w.get("can_face") is False
+    assert w.get("atk") == INFINITE_ATK
+    print("OK hand of infinity cannot face")
+
+
+def test_split_fighter_face_divine_shield_once():
+    """对手英雄圣盾只破一次：随从+武器合并后扣最小一击，不能分项各扣一次。"""
+    fighters = [
+        {"kind": "minion", "atk": 7, "health": 7, "attacks_left": 1, "can_face": True},
+        {"kind": "minion", "atk": 3, "health": 2, "attacks_left": 1, "can_face": True},
+        {
+            "kind": "weapon", "atk": 2, "health": 30, "attacks_left": 1,
+            "can_face": True, "durability": 2,
+        },
+    ]
+    minion, weapon, hero_buff, hp = LethalChecker._split_fighter_face(
+        fighters, defender_shield=True,
+    )
+    # 最优破盾浪费 2，剩余 7+3=10 随从；不可出现随从 7 且武器 0（分项双扣）
+    assert minion + weapon + hero_buff + hp == 10, (minion, weapon, hero_buff, hp)
+    assert weapon == 0 and minion == 10, (minion, weapon)
+    print("OK split fighter face divine shield once", minion, weapon)
+
+
+def test_abusive_sergeant_lethal_through_hero_divine_shield():
+    """叫嚣的中士：先战吼+2 再打脸；对手英雄圣盾时仍应用最小一击破盾。"""
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.active_player_id = 1
+    gs.in_game = True
+    _hero(gs, 1, 1, atk479=2)
+    opp = _hero(gs, 2, 2)
+    opp.health = 11
+    opp.tags["DIVINE_SHIELD"] = 1
+    _minion(gs, 10, 1, 7, 7)
+    gs.get_entity(10).card_id = "GVG_079"
+    _minion(gs, 11, 1, 3, 2)
+    gs.get_entity(11).card_id = "TOY_811"
+    gs.get_entity(11).tags["RUSH"] = 1
+    _weapon(gs, 40, 1, card_id="TOY_810", atk=2, dur=3)
+    m = gs.get_entity(50)
+    m.cardtype = "MINION"
+    m.controller = 1
+    m.zone = "HAND"
+    m.card_id = "CORE_CS2_188"
+    m.atk = 1
+    m.health = 5
+    m.cost = 1
+    m.tags["ZONE"] = "HAND"
+    m.tags["ATK"] = 1
+    m.tags["HEALTH"] = 5
+    m.tags["COST"] = 1
+    m.tags["TAUNT"] = 1
+
+    checker = LethalChecker(gs)
+    face = checker.overlay_board_face_damage()
+    note = checker.overlay_spell_note() or ""
+    assert face >= 11, f"expected lethal face>=11, got {face} note={note}"
+    assert "叫嚣的中士" in note, note
+    assert getattr(checker, "_overlay_best_order", "") == "spell_first", (
+        checker._overlay_best_order
+    )
+    print("OK abusive sergeant lethal through hero DS", face, note)
+
+
 if __name__ == "__main__":
     test_atiesh_weapon_strike_when_hero_479_zero()
     test_atiesh_weapon_in_overlay_with_moonwell()
@@ -269,4 +388,7 @@ if __name__ == "__main__":
     test_dk_ghoul_on_board_counts_as_skill_not_minion()
     test_opp_turn_hammer_muncher_board_floor()
     test_equipped_hammer_stamps_after_attack_buff()
+    test_hand_of_infinity_cannot_face()
+    test_split_fighter_face_divine_shield_once()
+    test_abusive_sergeant_lethal_through_hero_divine_shield()
     print("all passed")

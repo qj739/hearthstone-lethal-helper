@@ -5,6 +5,7 @@ from __future__ import annotations
 import random
 from typing import List, Optional, TYPE_CHECKING
 
+from .board_damage import INFINITE_ATK
 from .eudora_loot import _add_temp_weapon, _buff_friendly_minion, strip_weapon_fighters
 from .spell_board import (
     BoardSpellDef,
@@ -106,6 +107,8 @@ WEAPON_AFTER_ATTACK_META: dict[str, dict] = {
 def stamp_equipped_weapon_effects(fighter: dict, card_id: str) -> None:
     """把已装备武器 card_id 对应的攻击后触发写入 fighter（敲狼锤 +1/+1 等）。"""
     cid = card_id or ""
+    if cid == "END_012" or cid.endswith("END_012"):
+        fighter["can_face"] = False
     meta = WEAPON_AFTER_ATTACK_META.get(cid)
     if meta is None and cid.startswith("CORE_"):
         meta = WEAPON_AFTER_ATTACK_META.get(cid[5:])
@@ -335,6 +338,17 @@ def _apply_amplify(t, f, *, mult, **_kw):
     return SpellApplyResult()
 
 
+def _apply_hand_of_infinity(t, f, *, mult, **_kw):
+    """无穷之手：战吼本回合攻变为无穷；无法攻击英雄。"""
+    _equip(f, INFINITE_ATK, 2, "END_012", mult=1)
+    for i in range(len(f) - 1, -1, -1):
+        if f[i].get("kind") == "weapon" and f[i].get("card_id") == "END_012":
+            f[i]["can_face"] = False
+            f[i]["atk"] = INFINITE_ATK
+            break
+    return SpellApplyResult()
+
+
 _WEAPON_OVERRIDES = {
     "CATA_580": ("灾变战斧", _apply_cata_axe),
     "ETC_423": ("奥金利斧", _apply_ashbringer_lite),
@@ -367,6 +381,7 @@ _WEAPON_OVERRIDES = {
     "RLK_828": ("奎尔萨拉斯的希望", _apply_hope),
     "TOY_358": ("遥控器", _apply_remote),
     "REV_509": ("放大战刃", _apply_amplify),
+    "END_012": ("无穷之手", _apply_hand_of_infinity),
 }
 
 

@@ -27,6 +27,29 @@ def _set_enemy_minions_health(taunts: List[dict], health: int) -> None:
         if unit.get("shield"):
             unit["shield"] = False
         unit["health"] = hp
+        if "max_health" in unit:
+            unit["max_health"] = hp
+
+
+def _set_all_minions_health(taunts: List[dict], fighters: List[dict], health: int) -> None:
+    """将双方随从生命值设为指定值（生而平等）。"""
+    _set_enemy_minions_health(taunts, health)
+    hp = max(1, int(health))
+    for i, f in enumerate(fighters):
+        if f.get("kind") != "minion" or f.get("health", 0) <= 0:
+            continue
+        fighters[i] = dict(f)
+        if fighters[i].get("shield"):
+            fighters[i]["shield"] = False
+        fighters[i]["health"] = hp
+        if "max_health" in fighters[i]:
+            fighters[i]["max_health"] = hp
+
+
+def _apply_equality(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw) -> SpellApplyResult:
+    """生而平等：将所有随从的生命值变为 1。"""
+    _set_all_minions_health(taunts, fighters, 1)
+    return SpellApplyResult()
 
 
 def _buff_equipped_weapon(fighters: List[dict], bonus_atk: int) -> None:
@@ -268,6 +291,7 @@ def _register_p0_buff() -> None:
         (("TOY_716",), 4, "光速抢购", _apply_flash_sale, False),
         (("ETC_717", "ETC_717t"), 2, "悦耳嘻哈", _apply_hip_hop, False),
         (("ETC_201", "ETC_201t", "ETC_201t2"), 1, "一串香蕉", _apply_banana_bunch, False),
+        (("CORE_EX1_619", "EX1_619"), 2, "生而平等", _apply_equality, False),
     ]
     for card_ids, cost, name, fn, uses_random in specs:
         _register(

@@ -1240,7 +1240,7 @@ def test_p0_blood_in_the_water_shark_clears_taunt():
 
 
 def test_p0_blood_in_the_water_shark_no_face_empty_board():
-    """血染大海：空场 3 直伤 + 5/5 突袭可打脸（对手无随从时突袭规则）。"""
+    """血染大海：空场仅 3 直伤；5/5 突袭当回合仍不能打脸。"""
     gs = GameState()
     gs.local_player_id = 1
     gs.opponent_player_id = 2
@@ -1252,10 +1252,37 @@ def test_p0_blood_in_the_water_shark_no_face_empty_board():
     checker = LethalChecker(gs)
     total = checker.overlay_board_face_damage()
     _, board, weapon, spell, hp = checker.overlay_board_breakdown()
-    assert board == 5
-    assert spell == 3
-    assert total == 8
+    assert spell == 3, (spell, board, total)
+    assert board == 0, (board, total)
+    assert total == 3, total
     print("OK p0 blood in the water face only", total)
+
+
+def test_rocket_hopper_rush_no_face_empty_board():
+    """火箭跳蛙 MIS_306：突袭+过载，空场手牌打出当回合不能打脸（非冲锋）。"""
+    from hdt_python.arena_season_bulk import register_arena_season_gap
+    from hdt_python.rush_board import get_rush_def
+
+    register_arena_season_gap()
+    assert get_rush_def("MIS_306") is not None
+
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.active_player_id = 1
+    gs.in_game = True
+    _hero(gs, 1, 1, mana=10, used=0)
+    _hero(gs, 2, 2)
+    gs.get_entity(2).health = 10
+    m = _hand_minion(gs, 30, 1, 10, 10, 5, card_id="MIS_306", rush=True)
+
+    checker = LethalChecker(gs)
+    total = checker.overlay_board_face_damage()
+    note = checker.overlay_spell_note() or ""
+    _, board, weapon, spell, hp = checker.overlay_board_breakdown()
+    assert board == 0 and total == 0, (total, board, note, m.tags.get("RUSH"))
+    assert "火箭跳蛙" not in note, note
+    print("OK rocket hopper rush no face empty board", total, note)
 
 
 def test_p0_initiation_rush_copy_clears_taunt():
@@ -3072,6 +3099,45 @@ def test_p0_arbor_up_clears_taunt_no_face():
     print("OK p0 arbor up clears taunt no face", total)
 
 
+def test_spell_clear_bonus_label_not_buff():
+    """法术解嘲讽解锁场攻应标「法术清场」，不得误标「含BUFF」。"""
+    from hdt_python.overlay_combo_format import (
+        overlay_minion_face_bonus_paren,
+        split_minion_face_bonus,
+    )
+
+    assert split_minion_face_bonus(2, 4, 4) == (2, 0)
+    assert split_minion_face_bonus(0, 10, 4) == (4, 6)
+    assert split_minion_face_bonus(10, 14, 10) == (0, 4)
+
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.active_player_id = 1
+    gs.in_game = True
+    _hero(gs, 1, 1, mana=10, used=0)
+    _hero(gs, 2, 2)
+    gs.get_entity(2).health = 30
+    # 嘲讽 6 血需火球解掉；纯攻 4+4 耗尽才能换掉且无剩脸。火球解嘲 + 8 打脸 > 火球打脸 6。
+    for eid in (10, 11):
+        m = _minion(gs, eid, 1, 4, 4, taunt=True, card_id="YOP_005t")
+        m.tags["NUM_TURNS_IN_PLAY"] = 1
+    _minion(gs, 20, 2, 2, 6, taunt=True, card_id="CS2_051")
+    _hand_spell(gs, 30, 1, "CS2_029", 4)  # 火球打脸/解嘲讽都可
+
+    checker = LethalChecker(gs)
+    total = checker.overlay_board_face_damage()
+    assert total >= 8, total
+    paren = overlay_minion_face_bonus_paren(checker)
+    combo = checker.overlay_combo_display_lines()
+    assert "法术清场" in paren, paren
+    assert "含BUFF" not in paren, paren
+    joined = paren + "|" + "|".join(combo)
+    assert "法术清场" in joined, (paren, combo)
+    assert "含BUFF" not in joined, (paren, combo)
+    print("OK spell clear bonus label", paren)
+
+
 def test_p0_arbor_up_then_forests_gift_lethal():
     """树木生长铺场 buff 后森林赠礼按随从数再 buff → 场面斩杀。"""
     from hdt_python.spell_board import apply_spell_sequence, get_board_spell_def
@@ -3145,6 +3211,84 @@ def test_p0_flash_sale_summons_and_buffs_all_minions():
     assert token.get("shield") and token.get("taunt")
     assert token.get("attacks_left", 0) == 0
     print("OK p0 flash sale summons and buffs")
+
+
+def test_arcane_shot_face_lethal():
+    """奥术射击进手：对面 2 血时应计入 2 点直伤斩杀。"""
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.active_player_id = 1
+    gs.in_game = True
+    _hero(gs, 1, 1, mana=1, used=0)
+    _hero(gs, 2, 2)
+    gs.get_entity(2).health = 2
+    _hand_spell(gs, 30, 1, "CORE_DS1_185", 1)
+
+    from hdt_python.spell_board import get_board_spell_def
+    assert get_board_spell_def("CORE_DS1_185") is not None
+    assert get_board_spell_def("DS1_185") is not None
+
+    checker = LethalChecker(gs)
+    total = checker.overlay_board_face_damage()
+    note = checker.overlay_spell_note() or ""
+    assert total >= 2, (total, note)
+    assert "奥术射击" in note, note
+    print("OK arcane shot face lethal", total, note)
+
+
+def test_fireball_face_lethal_through_taunt():
+    """有嘲讽时火球仍可对英雄打脸斩杀（嘲讽不挡法术选脸）。"""
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.active_player_id = 1
+    gs.in_game = True
+    _hero(gs, 1, 1, mana=10, used=0)
+    _hero(gs, 2, 2)
+    gs.get_entity(2).health = 4
+    # 大嘲讽清不掉；场面也被挡，只能法术穿嘲打脸
+    _minion(gs, 20, 2, 5, 10, taunt=True, card_id="TAUNT_BIG")
+    _minion(gs, 21, 2, 3, 5, taunt=True, card_id="TAUNT_2")
+    m = _minion(gs, 10, 1, 5, 5, card_id="M5")
+    m.tags["NUM_TURNS_IN_PLAY"] = 1
+    _hand_spell(gs, 30, 1, "CORE_CS2_029", 4)
+
+    checker = LethalChecker(gs)
+    total = checker.overlay_board_face_damage()
+    note = checker.overlay_spell_note() or ""
+    assert total >= 4, (total, note)
+    assert "火球" in note, note
+    print("OK fireball face lethal through taunt", total, note)
+
+
+def test_equality_plus_consecration_lethal():
+    """生而平等进手后，应与奉献组出解场+打脸（不等打出后才认）。"""
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.active_player_id = 1
+    gs.in_game = True
+    _hero(gs, 1, 1, mana=5, used=0)
+    _hero(gs, 2, 2)
+    # 奉献只提供 2 点穿嘲打脸，不够；需平等降血后清嘲 + 场面打脸
+    gs.get_entity(2).health = 10
+    m = _minion(gs, 10, 1, 8, 8, card_id="M8")
+    m.tags["NUM_TURNS_IN_PLAY"] = 1
+    _minion(gs, 20, 2, 8, 8, taunt=True, card_id="T8")
+    _minion(gs, 21, 2, 5, 6, taunt=True, card_id="T5")
+    _hand_spell(gs, 30, 1, "CORE_EX1_619", 2)
+    _hand_spell(gs, 31, 1, "CORE_CS2_093", 3)
+
+    checker = LethalChecker(gs)
+    total = checker.overlay_board_face_damage()
+    combo = checker.overlay_combo_display_lines()
+    note = checker.overlay_spell_note()
+    assert total >= 10, (total, note, combo)
+    joined = note + "|" + "|".join(combo)
+    assert "生而平等" in joined, (note, combo)
+    assert "奉献" in joined, (note, combo)
+    print("OK equality+consecration lethal", total, note)
 
 
 def test_p0_flash_sale_enables_board_lethal():
@@ -6263,6 +6407,7 @@ if __name__ == "__main__":
     test_p0_plague_strike_summons_rush_clears_taunt()
     test_p0_blood_in_the_water_shark_clears_taunt()
     test_p0_blood_in_the_water_shark_no_face_empty_board()
+    test_rocket_hopper_rush_no_face_empty_board()
     test_p0_initiation_rush_copy_clears_taunt()
     test_p0_initiation_non_rush_copy_no_extra_face()
     test_p0_nightshade_tea_multi_drink()
@@ -6338,8 +6483,12 @@ if __name__ == "__main__":
     test_p0_for_quelthalas_buffs_targetable_minion()
     test_p0_arbor_up_summons_and_buffs_all_minions()
     test_p0_arbor_up_clears_taunt_no_face()
+    test_spell_clear_bonus_label_not_buff()
     test_p0_arbor_up_then_forests_gift_lethal()
     test_p0_flash_sale_summons_and_buffs_all_minions()
+    test_arcane_shot_face_lethal()
+    test_fireball_face_lethal_through_taunt()
+    test_equality_plus_consecration_lethal()
     test_p0_flash_sale_enables_board_lethal()
     test_p0_flash_sale_spell_plus_hero_power_mana_budget()
     test_p0_flash_sale_plus_fireblast_face_with_friendly_taunt_token()

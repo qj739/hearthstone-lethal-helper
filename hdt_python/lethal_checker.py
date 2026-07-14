@@ -13,6 +13,7 @@ from .board_damage import (
     is_silenced,
     is_players_turn,
     hero_can_attack_with_weapon,
+    hero_weapon_can_face,
     hero_has_divine_shield,
     hero_weapon_strike_damage,
     apply_divine_shield_to_hits,
@@ -1181,8 +1182,28 @@ class LethalChecker:
         return LethalChecker._fighters_face_damage(stolen_fs, defender_shield)
 
     @staticmethod
+    def _category_face_hits(fighters: List[dict]) -> List[int]:
+        """单类攻击者的打脸命中列表（不含圣盾）。"""
+        hits = list(LethalChecker._fighters_face_hits(fighters))
+        for f in fighters:
+            if f.get("kind") != "weapon" or f.get("health", 0) <= 0:
+                continue
+            if not f.get("can_face", True):
+                continue
+            aoe = int(f.get("hero_aoe_on_attack", 0) or 0)
+            if aoe <= 0:
+                continue
+            n = min(f.get("attacks_left", 0), f.get("durability", 0))
+            hits.extend([aoe] * n)
+        return hits
+
+    @staticmethod
     def _split_fighter_face(fighters: List[dict], defender_shield: bool = False) -> Tuple[int, int, int, int]:
-        """将剩余可打脸伤害拆为 (随从, 武器, 法术英雄攻, 英雄技能)。"""
+        """将剩余可打脸伤害拆为 (随从, 武器, 法术英雄攻, 英雄技能)。
+
+        对手英雄圣盾只破一次：必须合并所有命中后再扣最小一击，
+        不可对随从/武器分项各自扣圣盾（否则会重复浪费破盾）。
+        """
         minion_fs = [
             f for f in fighters
             if f.get("kind") == "minion"
@@ -1195,24 +1216,41 @@ class LethalChecker:
             if f.get("kind") == "hero" and not f.get("from_hero_power")
         ]
         hp_fs = [f for f in fighters if f.get("from_hero_power")]
-        from .rush_combat import inquisitor_mirror_face_damage
+        from .rush_combat import inquisitor_face_mirror_hits
 
-        minion_f = LethalChecker._fighters_face_damage(
-            minion_fs, defender_shield, include_inquisitor_mirror=False,
+        # 跟刀按全场英雄挥击次数计，并入随从分项
+        minion_hits = (
+            LethalChecker._category_face_hits(minion_fs)
+            + inquisitor_face_mirror_hits(fighters, [])
         )
-        minion_f += inquisitor_mirror_face_damage(fighters, defender_shield)
-        return (
-            minion_f,
-            LethalChecker._fighters_face_damage(
-                weapon_fs, defender_shield, include_inquisitor_mirror=False,
-            ),
-            LethalChecker._fighters_face_damage(
-                hero_buff_fs, defender_shield, include_inquisitor_mirror=False,
-            ),
-            LethalChecker._fighters_face_damage(
-                hp_fs, defender_shield, include_inquisitor_mirror=False,
-            ),
-        )
+        weapon_hits = LethalChecker._category_face_hits(weapon_fs)
+        hero_buff_hits = LethalChecker._category_face_hits(hero_buff_fs)
+        hp_hits = LethalChecker._category_face_hits(hp_fs)
+
+        buckets = [minion_hits, weapon_hits, hero_buff_hits, hp_hits]
+        if not defender_shield:
+            return (
+                sum(minion_hits),
+                sum(weapon_hits),
+                sum(hero_buff_hits),
+                sum(hp_hits),
+            )
+
+        all_hits: List[int] = []
+        owners: List[int] = []
+        for i, hits in enumerate(buckets):
+            for h in hits:
+                all_hits.append(h)
+                owners.append(i)
+        if not all_hits:
+            return (0, 0, 0, 0)
+
+        soak = min(all_hits)
+        soak_at = all_hits.index(soak)
+        soaked_bucket = owners[soak_at]
+        out = [sum(b) for b in buckets]
+        out[soaked_bucket] = max(0, out[soaked_bucket] - soak)
+        return (out[0], out[1], out[2], out[3])
 
     @staticmethod
     def _spell_face_including_stolen(
@@ -3956,7 +3994,7 @@ class LethalChecker:
                     "shield": hero.tags.get("DIVINE_SHIELD", 0) == 1,
                     "attacks_left": hero_attacks,
                     "durability": weapon.current_durability,
-                    "can_face": True,
+                    "can_face": hero_weapon_can_face(hero, weapon),
                 }
                 from .weapon_p0 import stamp_equipped_weapon_effects
                 stamp_equipped_weapon_effects(w_fighter, weapon.card_id or "")
@@ -3974,7 +4012,7 @@ class LethalChecker:
                     "health": hero.current_health + hero.tags.get("ARMOR", 0),
                     "shield": hero.tags.get("DIVINE_SHIELD", 0) == 1,
                     "attacks_left": hero_attacks,
-                    "can_face": True,
+                    "can_face": hero_weapon_can_face(hero, None),
                 })
 
         return fighters

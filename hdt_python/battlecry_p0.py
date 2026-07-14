@@ -7,6 +7,7 @@ from copy import deepcopy
 from typing import Callable, List, Optional, TYPE_CHECKING
 
 from .battlecry_board import _register_bc
+from .board_damage import hand_minion_attack, hand_minion_health
 from .combat_sim import project_board_face_after_spell
 from .spell_board import (
     BoardSpellDef,
@@ -897,6 +898,63 @@ def _apply_defias_smuggler(
     return SpellApplyResult()
 
 
+def _apply_abusive_sergeant(
+    t,
+    f,
+    *,
+    mult,
+    card=None,
+    gs=None,
+    player_id=None,
+    **_kw,
+) -> SpellApplyResult:
+    """叫嚣的中士：上场（失调）；战吼使一个友方随从本回合 +2 攻。"""
+    before_ids = {
+        u.get("entity_id")
+        for u in f
+        if u.get("kind") == "minion" and u.get("health", 0) > 0
+    }
+    atk = hand_minion_attack(card) if card is not None else 1
+    hp = hand_minion_health(card) if card is not None else 1
+    if atk <= 0:
+        atk = 1
+    if hp <= 0:
+        hp = 1
+    taunt = bool(card and int(card.tags.get("TAUNT", 0) or 0))
+    cid = (card.card_id if card and card.card_id else "") or "CORE_CS2_188"
+    _summon_friendly_fighter(
+        f, atk * mult, hp * max(int(mult), 1),
+        taunt=taunt, card_id=cid,
+    )
+    if not before_ids:
+        return SpellApplyResult()
+    # 只 buff 已在场上的随从（不含刚上场的中士）；优先能打脸的高攻
+    picked = None
+    best_rank = None
+    for i, unit in enumerate(f):
+        if unit.get("kind") != "minion" or unit.get("health", 0) <= 0:
+            continue
+        if unit.get("entity_id") not in before_ids:
+            continue
+        can_face_now = bool(
+            unit.get("can_face") and int(unit.get("attacks_left", 0) or 0) > 0
+        )
+        rank = (
+            1 if can_face_now else 0,
+            int(unit.get("atk", 0) or 0) * max(int(unit.get("attacks_left", 0) or 0), 1),
+            int(unit.get("atk", 0) or 0),
+        )
+        if best_rank is None or rank > best_rank:
+            best_rank = rank
+            picked = ("fighter", i, unit)
+    if picked is None:
+        return SpellApplyResult()
+    _apply_buff_to_spell_target(
+        f, picked, bonus_atk=2 * mult, bonus_health=0,
+    )
+    return SpellApplyResult()
+
+
 def _apply_ogrillon(t, f, *, mult, enemy_shield, **_kw) -> SpellApplyResult:
     """屠戮者奥格拉：受伤随从数 → +1/+1，对所有敌人攻击。"""
     n = _count_damaged_minions(t, f)
@@ -1007,6 +1065,7 @@ def _register_p0_battlecry() -> None:
         (("TOY_513",), 4, "沙画元素", _apply_sand_elemental, False),
         (("AV_294",), 2, "怒爪精锐", _apply_sharpclaw, False),
         (("JAIL_998",), 3, "迪菲亚私运者", _apply_defias_smuggler, False),
+        (("CORE_CS2_188", "CS2_188"), 1, "叫嚣的中士", _apply_abusive_sergeant, False),
         (("REV_934",), 6, "屠戮者奥格拉", _apply_ogrillon, False),
         (("GDB_855",), 8, "吞星兽", _apply_star_eater, False),
         (("EDR_464",), 7, "泰兰德", _apply_tyrande, False),

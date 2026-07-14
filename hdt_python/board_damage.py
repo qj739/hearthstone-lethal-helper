@@ -61,6 +61,37 @@ def _clamp_attack(value: int) -> int:
     return max(0, int(value))
 
 
+# 无法攻击英雄的武器（日志常写在英雄 CANNOT_ATTACK_HEROES，CardID 作兜底）
+_WEAPONS_CANNOT_ATTACK_HEROES = frozenset({
+    "END_012",  # 无穷之手
+})
+
+
+def hero_weapon_can_face(
+    hero_entity: Optional["Entity"],
+    weapon_entity: Optional["Entity"] = None,
+) -> bool:
+    """英雄持武是否可对敌方英雄打脸（无穷之手等除外）。"""
+    if hero_entity is not None and (
+        _tag(hero_entity, "CANNOT_ATTACK_HEROES")
+        or _tag(hero_entity, "CANT_ATTACK_HEROES")
+    ):
+        return False
+    if weapon_entity is None:
+        return True
+    if (
+        _tag(weapon_entity, "CANNOT_ATTACK_HEROES")
+        or _tag(weapon_entity, "CANT_ATTACK_HEROES")
+    ):
+        return False
+    cid = weapon_entity.card_id or ""
+    if cid in _WEAPONS_CANNOT_ATTACK_HEROES:
+        return False
+    if cid.startswith("CORE_") and cid[5:] in _WEAPONS_CANNOT_ATTACK_HEROES:
+        return False
+    return True
+
+
 def effective_attack_from_tags(tags: dict) -> int:
     """
     从实体 tags 读取当前攻击力。
@@ -251,20 +282,28 @@ def _zero_attack_weapon_ids() -> frozenset[str]:
 
 
 def _weapon_std_attack(entity: "Entity") -> int:
-    """武器攻击力：不用 4472/耐久；0 攻武器恒为 0。"""
+    """武器攻击力：不用 4472/耐久；0 攻武器恒为 0。无穷攻保留原值供清场，打脸另拦。"""
     cid = entity.card_id or ""
     if cid in _zero_attack_weapon_ids():
         return 0
     tags = entity.tags
     if "ATK" in tags:
-        return _clamp_attack(int(tags["ATK"]))
+        raw = int(tags["ATK"])
+        if raw == INFINITE_ATK:
+            return INFINITE_ATK
+        return _clamp_attack(raw)
     v479 = tags.get("479")
     if v479 is not None:
-        atk = _clamp_attack(int(v479))
+        raw = int(v479)
+        if raw == INFINITE_ATK:
+            return INFINITE_ATK
+        atk = _clamp_attack(raw)
         if _printed_minion_attack(cid) <= 0:
             return 0
         return atk
-    if entity.atk and entity.atk != INFINITE_ATK:
+    if entity.atk:
+        if entity.atk == INFINITE_ATK:
+            return INFINITE_ATK
         atk = _clamp_attack(entity.atk)
         if _printed_minion_attack(cid) <= 0:
             return 0
@@ -1052,6 +1091,8 @@ def hero_can_attack_with_weapon(
 def _attack_with_weapon(hero_entity: "Entity", weapon_entity: Optional["Entity"], active_turn: bool) -> int:
     if not hero_can_attack_with_weapon(hero_entity, weapon_entity, active_turn):
         return 0
+    if not hero_weapon_can_face(hero_entity, weapon_entity):
+        return 0
     base = hero_weapon_strike_damage(hero_entity, weapon_entity)
     used = attacks_this_turn(hero_entity) if active_turn else 0
     if weapon_entity is None:
@@ -1149,20 +1190,24 @@ class PlayerBoardView:
         if self.hero and self.hero.include:
             hero_entity = self.hero.entity
             weapon_entity = self.hero.weapon.entity if self.hero.weapon else None
-            if weapon_entity and _std_attack(weapon_entity) > 0:
-                w_atk = _std_attack(weapon_entity)
-                silenced = is_silenced(hero_entity)
-                per_turn = attacks_per_turn(hero_entity, silenced)
-                used = (
-                    effective_attacks_this_turn(hero_entity, active_turn=self.active_turn)
-                    if self.active_turn else 0
-                )
-                remaining = max(per_turn - used, 0)
-                dur = _weapon_health(weapon_entity)
-                for _ in range(min(remaining, dur)):
-                    hits.append(w_atk)
-            elif self.hero.attack > 0:
-                hits.append(self.hero.attack)
+            if hero_weapon_can_face(hero_entity, weapon_entity):
+                if weapon_entity and _std_attack(weapon_entity) > 0:
+                    w_atk = _std_attack(weapon_entity)
+                    if w_atk != INFINITE_ATK:
+                        silenced = is_silenced(hero_entity)
+                        per_turn = attacks_per_turn(hero_entity, silenced)
+                        used = (
+                            effective_attacks_this_turn(
+                                hero_entity, active_turn=self.active_turn,
+                            )
+                            if self.active_turn else 0
+                        )
+                        remaining = max(per_turn - used, 0)
+                        dur = _weapon_health(weapon_entity)
+                        for _ in range(min(remaining, dur)):
+                            hits.append(w_atk)
+                elif self.hero.attack > 0:
+                    hits.append(self.hero.attack)
         minion_fighters: List[dict] = []
         for card in self.cards:
             if not card.entity.is_minion:

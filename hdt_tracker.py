@@ -461,10 +461,12 @@ class HearthstoneTracker:
         extras = []
         if cfg.show_breakdown:
             if board_minion > 0:
-                if board_minion > pure_board:
-                    extras.append(
-                        f"随{board_minion}(含BUFF+{board_minion - pure_board})"
-                    )
+                from hdt_python.overlay_combo_format import (
+                    overlay_minion_face_bonus_paren,
+                )
+                bonus = overlay_minion_face_bonus_paren(self.lethal_checker)
+                if bonus:
+                    extras.append(f"随{board_minion}{bonus}")
                 else:
                     extras.append(f"随{board_minion}")
             if hero_buff_face > 0:

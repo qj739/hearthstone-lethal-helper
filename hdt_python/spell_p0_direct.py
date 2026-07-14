@@ -157,6 +157,13 @@ def _apply_timestop(taunts, fighters, *, mult, enemy_shield, spell_power=0, rng=
 
 # --- 最低生命值敌人（确定分配）---
 
+def _apply_arcane_shot(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw) -> SpellApplyResult:
+    """奥术射击：对一个敌人造成 2 点伤害。"""
+    return _apply_optimal_single_target_damage(
+        taunts, fighters, _sd(2, mult=mult, spell_power=spell_power), enemy_shield=enemy_shield,
+    )
+
+
 def _apply_fireball(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw) -> SpellApplyResult:
     return _apply_optimal_single_target_damage(
         taunts, fighters, _sd(6, mult=mult, spell_power=spell_power), enemy_shield=enemy_shield,
@@ -489,6 +496,7 @@ def _register_p0_direct() -> None:
         (("CATA_498",), 3, "拉法姆的奋战", _apply_rafaams_stand, True),
         (("CATA_303",), 2, "净化吐息", _apply_purifying_breath, False),
         (("TIME_611",), 2, "时间停滞", _apply_timestop, False),
+        (("DS1_185", "CORE_DS1_185"), 1, "奥术射击", _apply_arcane_shot, False),
         (("CS2_029", "CORE_CS2_029"), 4, "火球术", _apply_fireball, False),
         (("CS2_012", "CORE_CS2_012"), 3, "横扫", _apply_swipe, False),
         (("FIR_909",), 2, "爆裂射击", _apply_bursting_shot, True),

@@ -242,14 +242,64 @@ def _fighter_display_name(unit: dict, gs: Optional["GameState"] = None) -> str:
     return cid or "随从"
 
 
+def overlay_open_board_face(checker: "LethalChecker") -> int:
+    """无嘲讽阻挡时，当前场面随从可打脸（未模拟法术 BUFF）。"""
+    local = checker.game_state.local_player_id
+    if local is None:
+        return 0
+    board_view = checker._board_view_for_fighters(local)
+    opp = checker.game_state.opponent_player_id
+    opp_hero = checker.game_state.get_hero(opp) if opp is not None else None
+    shield = hero_has_divine_shield(opp_hero)
+    return checker._compute_immediate_board_face(board_view, local, [], shield)
+
+
+def split_minion_face_bonus(
+    pure: int, minion_face: int, open_face: int,
+) -> Tuple[int, int]:
+    """
+    将「模拟法术后随从打脸 − 纯场面」拆成 (法术清场增量, BUFF增量)。
+    清场 = 解开嘲讽后、不加攻时就能多打出的部分；其余视为真实 BUFF。
+    """
+    total = max(0, int(minion_face) - int(pure))
+    if total <= 0:
+        return 0, 0
+    clear_cap = max(0, int(open_face) - int(pure))
+    clear_bonus = min(total, clear_cap)
+    buff_bonus = total - clear_bonus
+    return clear_bonus, buff_bonus
+
+
+def format_minion_face_bonus_paren(clear_bonus: int, buff_bonus: int) -> str:
+    """浮层/步骤括号后缀，如 (法术清场+2,含BUFF+3)。"""
+    parts: List[str] = []
+    if clear_bonus > 0:
+        parts.append(f"法术清场+{clear_bonus}")
+    if buff_bonus > 0:
+        parts.append(f"含BUFF+{buff_bonus}")
+    if not parts:
+        return ""
+    return "(" + ",".join(parts) + ")"
+
+
+def overlay_minion_face_bonus_paren(checker: "LethalChecker") -> str:
+    """按当前 Overlay 分项生成场面打脸增量标注。"""
+    pure, minion_bd, _, _, _ = checker.overlay_board_breakdown()
+    hand_charge = checker.overlay_hand_charge_face()
+    display_minion = max(0, minion_bd - hand_charge)
+    clear_bonus, buff_bonus = split_minion_face_bonus(
+        pure, display_minion, overlay_open_board_face(checker),
+    )
+    return format_minion_face_bonus_paren(clear_bonus, buff_bonus)
+
+
 def _board_face_step_label(checker: "LethalChecker", minion_face: int) -> str:
-    """场面随从打脸：若含模拟法术/地标 BUFF，标明增量，避免与卡面攻混淆。"""
+    """场面随从打脸：清场增量标「法术清场」，真 BUFF 标「含BUFF」。"""
     if minion_face <= 0:
         return "场面随从打脸"
-    pure, minion_bd, _, _, _ = checker.overlay_board_breakdown()
-    buff_bonus = max(0, minion_bd - pure)
-    if buff_bonus > 0:
-        return f"场面随从打脸(含BUFF+{buff_bonus})"
+    suffix = overlay_minion_face_bonus_paren(checker)
+    if suffix:
+        return f"场面随从打脸{suffix}"
     return "场面随从打脸"
 
 

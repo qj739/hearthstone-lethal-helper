@@ -92,7 +92,34 @@ def test_clear_conscience_enables_lethal():
     assert lethal, "5 atk + 问心无愧 +2 = 7 should be lethal vs 6 hp"
 
 
+def test_clear_conscience_does_not_enable_awakened_sick_face():
+    """刚苏醒/召唤失调的高攻随从可被问心无愧点选，但本回合仍不能打脸。"""
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.active_player_id = 1
+    gs.in_game = True
+    _hero(gs, 10, 1, mana=10)
+    _hero(gs, 20, 2, dmg=20)  # 敌 10 血
+    ready = _minion(gs, 30, 1, 3, 5, card_id="ready")
+    ready.tags["NUM_TURNS_IN_PLAY"] = 2
+    sick = _minion(gs, 31, 1, 12, 12, card_id="TOY_647")
+    sick.tags["NUM_TURNS_IN_PLAY"] = 0
+    sick.tags["DORMANT_AWAKENED_THIS_TURN"] = 1
+    sick.tags["EXHAUSTED"] = 1
+    _hand_spell(gs, 40, 1, "MAW_021", 3)
+
+    lc = LethalChecker(gs)
+    face = lc.overlay_board_face_damage()
+    # 仅 3 攻可出手：buff 应落在可攻随从上 → 5；绝不能把 12 攻玛瑟算进脸
+    assert face < 10, f"sick Mag must not face; expected face~5 got {face}"
+    assert face >= 5, f"ready minion should get +2 buff; got {face}"
+    _, _, lethal = lc.calculate_lethal_potential()
+    assert not lethal, "should not false-lethal via awakened Magtheridon face"
+
+
 if __name__ == "__main__":
     test_clear_conscience_registered_and_buffs()
     test_clear_conscience_enables_lethal()
+    test_clear_conscience_does_not_enable_awakened_sick_face()
     print("ok")

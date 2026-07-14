@@ -680,6 +680,40 @@ def test_priestess_of_fury():
     print("OK priestess +6", face)
 
 
+def test_runaway_blackwing_end_turn_never_faces():
+    """窜逃的黑翼龙：回合结束随机打敌方随从，不得计入对英雄场攻。"""
+    from hdt_python.end_turn_board import EtKind, _resolve_end_turn_def
+
+    for cid in ("YOP_034", "CORE_YOP_034"):
+        defn = _resolve_end_turn_def(cid)
+        assert defn is not None, cid
+        assert defn.kind == EtKind.RANDOM_ENEMY_MINION, (cid, defn.kind)
+
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.in_game = True
+    _hero(gs, 1, 1)
+    _hero(gs, 2, 2)
+    # 空场 / 有嘲讽随从：回合结束均不应产生打脸
+    _minion_db(gs, 10, 1, "CORE_YOP_034", can_attack=False)
+    face_empty, notes = end_turn_face_damage(_board_entities(gs, 1), [], False)
+    assert face_empty == 0, face_empty
+    assert not any("+10" in n or "打脸" in n for n in notes), notes
+
+    enemy = [{"kind": "minion", "health": 12, "atk": 3, "taunt": True, "shield": False}]
+    face_board, _ = end_turn_face_damage(_board_entities(gs, 1), enemy, False)
+    assert face_board == 0, face_board
+
+    checker = LethalChecker(gs)
+    _set_local_turn(gs)
+    gs.active_player_id = 2  # 对方回合 → 下回合预览不应把 10 算进场攻
+    total = checker.overlay_board_face_damage()
+    # 刚打出不能攻，且 ET 不打脸 → 场攻 0
+    assert total == 0, (total, checker.overlay_spell_note(), checker.overlay_board_breakdown())
+    print("OK runaway blackwing ET never faces", face_empty, face_board, total)
+
+
 def test_earthen_dragon():
     """土石幼龙：回合结束 +4 打脸。"""
     gs = GameState()
@@ -991,5 +1025,6 @@ if __name__ == "__main__":
     test_scalecleaver_warden()
     test_brasswing()
     test_priestess_of_fury()
+    test_runaway_blackwing_end_turn_never_faces()
     test_earthen_dragon()
     print("all passed")

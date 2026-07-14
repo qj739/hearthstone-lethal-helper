@@ -960,6 +960,8 @@ def _friendly_spell_target_minions(
             if atk <= 0 and m.atk > 0:
                 atk = m.atk
             immune = entity_spell_immune(m, gs)
+            # 本回合未进 fighters：可被法术指定，但不能因此获得攻击权
+            # （召唤失调 / 刚苏醒 / 已疲劳等）。否则问心无愧等会把玛瑟误算打脸。
             out.append(("board", eid, {
                 "kind": "minion",
                 "entity_id": eid,
@@ -968,8 +970,8 @@ def _friendly_spell_target_minions(
                 "health": m.current_health,
                 "shield": m.tags.get("DIVINE_SHIELD", 0) == 1,
                 "spell_immune": immune,
-                "attacks_left": 1,
-                "can_face": True,
+                "attacks_left": 0,
+                "can_face": False,
             }))
     return out
 
@@ -986,6 +988,8 @@ def _pick_best_spell_target_fighter(
     return max(
         candidates,
         key=lambda item: (
+            # 斩杀优先 buff 本回合能出手的；失调随从只作次选
+            1 if int(item[2].get("attacks_left", 0) or 0) > 0 else 0,
             int(item[2].get("atk", 0) or 0)
             * max(int(item[2].get("attacks_left", 0) or 0), 1),
             int(item[2].get("atk", 0) or 0),
@@ -1015,9 +1019,12 @@ def _apply_buff_to_spell_target(
             fighters[i]["atk"] = fighters[i].get("atk", 0) + bonus_atk
             fighters[i]["health"] = fighters[i].get("health", 0) + bonus_health
             return
+    # 未在 fighters 中：仅记录 buff 后的身材，不授予本回合攻击权
     buffed = dict(unit)
     buffed["atk"] = buffed.get("atk", 0) + bonus_atk
     buffed["health"] = buffed.get("health", 0) + bonus_health
+    buffed["attacks_left"] = 0
+    buffed["can_face"] = False
     fighters.append(buffed)
 
 

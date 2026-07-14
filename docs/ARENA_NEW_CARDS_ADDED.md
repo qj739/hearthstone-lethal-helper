@@ -247,8 +247,8 @@
 | `TOY_824` | 黑棘针线师 | random_split_enemies |
 | `TOY_820` | 废弃电子玩偶 | attack_lowest_enemy |
 | `CORE_TTN_866` | 神秘恐魔 | hero_damage |
-| `YOP_034` | 窜逃的黑翼龙 | random_split_enemies |
-| `CORE_YOP_034` | 窜逃的黑翼龙 | random_split_enemies |
+| `YOP_034` | 窜逃的黑翼龙 | random_enemy_minion |
+| `CORE_YOP_034` | 窜逃的黑翼龙 | random_enemy_minion |
 | `BAR_063` | 甜水鱼人斥候 | all_enemies_damage |
 | `BAR_064` | 精明的奥术师 | all_enemies_damage |
 

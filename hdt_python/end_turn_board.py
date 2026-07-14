@@ -17,6 +17,8 @@ class EtKind(str, Enum):
     HERO_DAMAGE = "hero_damage"
     ALL_ENEMIES_DAMAGE = "all_enemies_damage"
     RANDOM_SPLIT_ENEMIES = "random_split_enemies"
+    # 仅随机敌方随从：永不计入打脸（如窜逃的黑翼龙）
+    RANDOM_ENEMY_MINION = "random_enemy_minion"
     SUMMON_ATTACK = "summon_attack"
     SUMMON_ATTACK_RANDOM = "summon_attack_random"
     SUMMON_ATTACK_MULTI = "summon_attack_multi"
@@ -81,6 +83,13 @@ END_TURN_BY_CARD: Dict[str, EndTurnDef] = {
     ),
     "CATA_999": EndTurnDef(  # 5费 4/4
         EtKind.HERO_DAMAGE, amount=4, name="土石幼龙",
+    ),
+    # 回合结束：随机对一个敌方随从造成 10 点伤害（不能打英雄）
+    "YOP_034": EndTurnDef(
+        EtKind.RANDOM_ENEMY_MINION, amount=10, uses_random=True, name="窜逃的黑翼龙",
+    ),
+    "CORE_YOP_034": EndTurnDef(
+        EtKind.RANDOM_ENEMY_MINION, amount=10, uses_random=True, name="窜逃的黑翼龙",
     ),
 }
 
@@ -511,6 +520,9 @@ def _apply_end_turn_def(
         return apply_divine_shield_to_hits([defn.amount], defender_shield)
     if defn.kind == EtKind.RANDOM_SPLIT_ENEMIES:
         return _random_split_enemies_face(defn.amount, enemy_board, defender_shield)
+    if defn.kind == EtKind.RANDOM_ENEMY_MINION:
+        # 文本为「敌方随从」：无溢出、不选英雄，场攻贡献恒为 0
+        return 0
     if defn.kind == EtKind.SUMMON_ATTACK:
         return _summon_attack_face(defn.summon_atk, enemy_board, defender_shield)
     if defn.kind == EtKind.SUMMON_ATTACK_RANDOM:

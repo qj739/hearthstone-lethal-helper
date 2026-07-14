@@ -162,8 +162,12 @@ _END_TURN_SPECS: Dict[str, EndTurnDef] = {
     ),
     "TOY_820": EndTurnDef(EtKind.ATTACK_LOWEST_ENEMY, uses_self_atk=True, name="废弃电子玩偶"),
     "CORE_TTN_866": EndTurnDef(EtKind.HERO_DAMAGE, amount=0, name="神秘恐魔"),
-    "YOP_034": EndTurnDef(EtKind.RANDOM_SPLIT_ENEMIES, amount=10, uses_random=True, name="窜逃的黑翼龙"),
-    "CORE_YOP_034": EndTurnDef(EtKind.RANDOM_SPLIT_ENEMIES, amount=10, uses_random=True, name="窜逃的黑翼龙"),
+    "YOP_034": EndTurnDef(
+        EtKind.RANDOM_ENEMY_MINION, amount=10, uses_random=True, name="窜逃的黑翼龙",
+    ),
+    "CORE_YOP_034": EndTurnDef(
+        EtKind.RANDOM_ENEMY_MINION, amount=10, uses_random=True, name="窜逃的黑翼龙",
+    ),
     "BAR_063": EndTurnDef(EtKind.ALL_ENEMIES_DAMAGE, amount=2, name="沃坎诺斯"),
     "BAR_064": EndTurnDef(EtKind.ALL_ENEMIES_DAMAGE, amount=2, name="亮铜之翼"),
 }

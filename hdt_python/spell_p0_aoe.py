@@ -252,6 +252,16 @@ def _apply_sunset_volley(taunts, fighters, *, mult, enemy_shield, spell_power=0,
     )
 
 
+def _apply_arcane_missiles(
+    taunts, fighters, *, mult, enemy_shield, spell_power=0, rng=None, **_kw,
+) -> SpellApplyResult:
+    """奥术飞弹：3 伤随机分配到所有敌人（含英雄）。"""
+    return _apply_random_split_damage(
+        taunts, fighters, _sd(3, mult=mult, spell_power=spell_power), enemy_shield=enemy_shield,
+        rng=_rng(rng), include_enemy_hero=True,
+    )
+
+
 def _apply_boneblade_flurry(
     taunts,
     fighters,
@@ -435,6 +445,7 @@ def _register_p0_aoe() -> None:
         (("VAC_414",), 3, "炽热火炭", _apply_hot_coals, False, None),
         (("ICC_041",), 2, "亵渎", _apply_defile, False, None),
         (("WW_427",), 9, "夕阳漫射", _apply_sunset_volley, True, None),
+        (("EX1_277", "CORE_EX1_277", "VAN_EX1_277"), 1, "奥术飞弹", _apply_arcane_missiles, True, None),
         (("TIME_215",), 2, "雷霆动地", _all_minions_aoe(1), False, None),
         (("TIME_619t2",), 3, "赞达拉惨象", _all_enemies_aoe(2), False, None),
         (("TTN_460",), 3, "致命诛灭", _apply_mortal_eradication, True, None),

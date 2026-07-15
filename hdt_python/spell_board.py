@@ -1737,6 +1737,9 @@ _SPELL_SIM_TIER_OVERRIDES: Dict[str, SpellSimTier] = {
     "REV_290": SpellSimTier.UTILITY,            # 赎罪教堂 +2/+1
     "CORE_REV_290": SpellSimTier.UTILITY,
     "JAIL_445": SpellSimTier.DIRECT_FACE,       # 骨刃乱舞 3(+3) 随机敌人
+    "EX1_277": SpellSimTier.DIRECT_FACE,        # 奥术飞弹 3 随机所有敌人
+    "CORE_EX1_277": SpellSimTier.DIRECT_FACE,
+    "VAN_EX1_277": SpellSimTier.DIRECT_FACE,
     "END_014": SpellSimTier.UTILITY,            # 协作火花 3 伤 + 击杀 buff +3/+3
     "ETC_201": SpellSimTier.UTILITY,            # 一串香蕉 +1/+1 ×3
     "ETC_201t": SpellSimTier.UTILITY,
@@ -1808,6 +1811,11 @@ def spell_sim_tier_for_card(card_id: str) -> SpellSimTier:
 
     if get_combo_def(card_id) is not None:
         # 连击随从：常与 UTILITY 层法术（混乱打击等）同桶，以枚举先触发连击的顺序
+        return SpellSimTier.UTILITY
+    from .battlecry_board import get_battlecry_def
+
+    if get_battlecry_def(card_id) is not None:
+        # 战吼 buff/清场：走 combo，勿进无嘲讽直伤前缀（否则 CORE_ 骨魇等会被 0 伤丢掉）
         return SpellSimTier.UTILITY
     defn = BOARD_CLEAR_SPELLS.get(card_id)
     if defn is None:
@@ -2360,9 +2368,10 @@ def sequence_damages_friendly_minions(sequence) -> bool:
 
 
 def _is_battlecry_step(defn: BoardSpellDef, card: Optional["Entity"]) -> bool:
-    from .battlecry_board import BOARD_BATTLECRY
+    # 用 get_battlecry_def：CORE_ICC_705 等仅注册了非 CORE id 时也能识别
+    from .battlecry_board import get_battlecry_def
 
-    return _step_card_id(defn, card) in BOARD_BATTLECRY
+    return get_battlecry_def(_step_card_id(defn, card)) is not None
 
 
 def _is_hostile_invader_step(defn: BoardSpellDef, card: Optional["Entity"]) -> bool:

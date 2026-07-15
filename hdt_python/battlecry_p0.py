@@ -1061,7 +1061,7 @@ def _register_p0_battlecry() -> None:
         (("RLK_867",), 2, "维库通灵师", _apply_vrykul_necrolyte, False),
         (("CATA_161",), 3, "残恶梦魇", _apply_gruesome_nightmare, False),
         (("TID_002",), 3, "自然使徒", _apply_herald_nature, False),
-        (("ICC_705",), 7, "骨魇", _apply_bonemare, False),
+        (("ICC_705", "CORE_ICC_705"), 7, "骨魇", _apply_bonemare, False),
         (("TOY_513",), 4, "沙画元素", _apply_sand_elemental, False),
         (("AV_294",), 2, "怒爪精锐", _apply_sharpclaw, False),
         (("JAIL_998",), 3, "迪菲亚私运者", _apply_defias_smuggler, False),

@@ -17,12 +17,14 @@ SPELL_DAMAGE = {
     "CS2_029": (4, 6, True),       # 火球术 Fireball
     "EX1_279": (10, 10, True),     # 炎爆术 Pyroblast
     "CS2_024": (2, 3, True),       # 寒冰箭 Frostbolt
-    "CS2_025": (1, 3, False),      # 奥术飞弹 Arcane Missiles (随机分配)
+    "CS2_025": (2, 1, False),      # 魔爆术 Arcane Explosion (仅敌方随从)
     "CS2_032": (7, 4, False),      # 烈焰风暴 Flamestrike (AOE)
     "EX1_275": (3, 3, True),       # 寒冰枪 Ice Lance (冻结目标0费)
-    "NEW1_012": (4, 4, False),     # 魔爆术 Arcane Explosion (AOE)
+    "NEW1_012": (4, 4, False),     # （遗留条目，勿与魔爆混淆）
     "CS2_023": (0, 1, True),       # 奥术智慧 Arcane Intellect (抽牌)
-    "CORE_EX1_277": (1, 3, False), # 奥术飞弹 Arcane Missiles
+    "EX1_277": (1, 3, True),       # 奥术飞弹 Arcane Missiles
+    "CORE_EX1_277": (1, 3, True),  # 奥术飞弹 Arcane Missiles
+    "VAN_EX1_277": (1, 3, True),
 
     # === 术士 ===
     "CS2_057": (3, 4, True),       # 暗影箭 Shadow Bolt (只能打随从)

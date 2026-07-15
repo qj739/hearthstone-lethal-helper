@@ -137,12 +137,19 @@ def sequence_has_pre_play_battlecry(sequence) -> bool:
 
 def sequence_has_conflicting_battlecry(sequence) -> bool:
     """序列含非穿插战吼随从时，不走通用法术穿插。"""
-    from .battlecry_board import BOARD_BATTLECRY
+    from .battlecry_board import get_battlecry_def
 
     for defn, _, card in sequence:
         cid = step_card_id(defn, card)
-        if cid in BOARD_BATTLECRY and cid not in ATTACK_INTERLEAVE_BATTLECRY_IDS:
-            return True
+        if get_battlecry_def(cid) is None:
+            continue
+        base = cid[5:] if cid.startswith("CORE_") else cid
+        if (
+            cid in ATTACK_INTERLEAVE_BATTLECRY_IDS
+            or base in ATTACK_INTERLEAVE_BATTLECRY_IDS
+        ):
+            continue
+        return True
     return False
 
 
@@ -157,14 +164,14 @@ def sequence_needs_attack_interleave(sequence) -> bool:
         return False
     if sequence_is_faceless_only(sequence):
         return True
-    from .battlecry_board import BOARD_BATTLECRY
+    from .battlecry_board import get_battlecry_def
 
     has_pre_play = False
     for defn, _, card in sequence:
         cid = step_card_id(defn, card)
         if cid in PRE_PLAY_ATTACK_INTERLEAVE_IDS:
             has_pre_play = True
-        elif cid in BOARD_BATTLECRY:
+        elif get_battlecry_def(cid) is not None:
             return False
     if has_pre_play:
         return True

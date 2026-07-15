@@ -108,7 +108,10 @@ SPELL_DAMAGE_DB = {
     "CS2_024": (2, 3, True),       # 寒冰箭 Frostbolt
     "EX1_173": (6, 5, True),       # 星火术 Starfire
     "VAN_EX1_173": (6, 5, True),   # 星火术（怀旧）
-    "CS2_025": (1, 3, True),       # 奥术飞弹 Arcane Missiles（随机，可打脸）
+    "CS2_025": (2, 1, False),      # 魔爆术 Arcane Explosion（仅敌方随从）
+    "EX1_277": (1, 3, True),       # 奥术飞弹 Arcane Missiles（随机，可打脸）
+    "CORE_EX1_277": (1, 3, True),
+    "VAN_EX1_277": (1, 3, True),
     "RLK_843": (1, 2, True),       # 奥术箭（法力渴求8→3伤，快速估算用基底2）
     "EX1_275": (3, 3, True),       # 寒冰枪 Ice Lance
 

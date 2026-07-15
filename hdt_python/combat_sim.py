@@ -40,18 +40,13 @@ def unit_is_active_minion(unit: dict) -> bool:
 
 
 def _friendly_taunt_blocks_face(fighters: List[dict]) -> bool:
-    """疯狂药水等当回合偷来的嘲讽不阻挡己方其余随从打脸。
+    """己方嘲讽从不通用阻挡打脸。
 
-    己方召唤的嘲讽（当回合不能攻击）也不应阻挡其余随从打脸（如光速抢购 token）。
+    炉石规则：必须攻击的是敌方嘲讽；己方嘲讽随从仍可（也仍会）打英雄。
+    历史上曾误把「己方可攻击嘲讽」当成全场不能打脸，导致骨魇等 buff+嘲讽
+    后斩杀漏判。保留函数以免旧调用点报错，恒为 False。
     """
-    return any(
-        f.get("kind") == "minion"
-        and f.get("health", 0) > 0
-        and f.get("taunt")
-        and not f.get("stolen_turn")
-        and f.get("attacks_left", 0) > 0
-        for f in fighters
-    )
+    return False
 
 
 def fighters_face_hits(fighters: List[dict]) -> List[int]:

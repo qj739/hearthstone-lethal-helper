@@ -112,6 +112,8 @@ SPELL_DAMAGE_DB = {
     "EX1_277": (1, 3, True),       # 奥术飞弹 Arcane Missiles（随机，可打脸）
     "CORE_EX1_277": (1, 3, True),
     "VAN_EX1_277": (1, 3, True),
+    "JAIL_881": (3, 5, True),      # 奥术绊索：5 随机所有敌人
+    "JAIL_881t": (3, 5, True),     # 抽到再触发的绊索（若进手）
     "RLK_843": (1, 2, True),       # 奥术箭（法力渴求8→3伤，快速估算用基底2）
     "EX1_275": (3, 3, True),       # 寒冰枪 Ice Lance
 
@@ -970,34 +972,24 @@ class LethalChecker:
         return self.overlay_board_face_damage()
 
     def overlay_hand_charge_face(self) -> int:
-        """手牌冲锋等打出后计入斩杀、但不计入场攻主数字的分量。"""
+        """手牌冲锋打出后的打脸分量（单独分项；不进场攻主数字、不算「含BUFF」）。"""
         if not getattr(self, "_overlay_face_computed", False):
             return 0
         local = self.game_state.local_player_id
         if local is None:
             return 0
-        # 无手牌冲锋时不走残差公式，避免武器/装备法术伤害误显示为「冲」
         if not collect_hand_charge_minions(self.game_state, local):
             return 0
-        total = getattr(self, "_overlay_total_face", 0)
-        dormant_et = 0
-        if local is not None:
-            opp = self.game_state.opponent_player_id
-            opp_hero = self.game_state.get_hero(opp) if opp is not None else None
-            from .board_damage import hero_has_divine_shield
-            dormant_et = self._board_dormant_end_turn_face(
-                local, hero_has_divine_shield(opp_hero),
-            )
-        board_only = (
-            getattr(self, "_overlay_pure_board_face", 0)
-            + getattr(self, "_overlay_board_face", 0)
-            + getattr(self, "_overlay_weapon_face", 0)
-            + getattr(self, "_overlay_spell_face", 0)
-            + getattr(self, "_overlay_hero_power_face", 0)
-            + getattr(self, "_overlay_hero_buff_face", 0)
-            + getattr(self, "_overlay_battlecry_face", 0)
-        )
-        return max(0, total - dormant_et - board_only)
+        # 残差公式不可用：冲锋伤害已并入 _overlay_board_face。
+        # 按最优连招剩余法力内可打出的冲锋攻击力直接合计（含双面间谍复制）。
+        from .overlay_combo_format import playable_hand_charges_for_overlay
+
+        total = 0
+        for entity, _cost, atk in playable_hand_charges_for_overlay(self):
+            copies = 2 if double_agent_summons_copy(self.game_state, local, entity) else 1
+            total += max(0, int(atk)) * copies
+        # 不超过场面随从分项（冲锋清嘲耗尽时不上溢）
+        return min(total, max(0, int(getattr(self, "_overlay_board_face", 0) or 0)))
 
     def overlay_display_face(self) -> int:
         """Overlay 场攻主数字：法术后场面+法术/技能/战吼，不含手牌冲锋与休眠回合结束。"""
@@ -1107,14 +1099,20 @@ class LethalChecker:
         atk: int,
         player_id: Optional[int],
     ) -> None:
-        fighters.append(self._hand_charge_fighter(entity, atk))
+        from .spell_board import apply_leokk_aura_on_minion_added
+
+        unit = self._hand_charge_fighter(entity, atk)
+        fighters.append(unit)
+        apply_leokk_aura_on_minion_added(fighters, unit)
         if (
             player_id is not None
             and double_agent_summons_copy(self.game_state, player_id, entity)
         ):
-            fighters.append(
-                self._hand_charge_fighter(entity, atk, entity_id=-entity.entity_id),
+            copy_unit = self._hand_charge_fighter(
+                entity, atk, entity_id=-entity.entity_id,
             )
+            fighters.append(copy_unit)
+            apply_leokk_aura_on_minion_added(fighters, copy_unit)
 
     def _add_playable_hand_charges(
         self,
@@ -1388,22 +1386,17 @@ class LethalChecker:
             return max(outcomes, key=lambda x: x[0])[0]
         living_taunts = self._living_taunt_states(enemy)
         if living_taunts:
-            face, _, can_clear = self._simulate_taunt_clear_from_state(
+            clear_face, _, can_clear = self._simulate_taunt_clear_from_state(
                 fs, living_taunts, defender_shield, enemy_board=enemy,
             )
             if not can_clear:
                 total = spell_face + hp_direct
             else:
-                minion_board, weapon_board, hero_buff_board, remain_hp = (
-                    self._split_fighter_face(fs, defender_shield)
-                )
+                # clear_face 已含清嘲后剩余打脸；fs 攻击已耗尽，勿再 split
                 spell_face = self._spell_face_including_stolen(
                     fs, spell_face, defender_shield,
                 )
-                total = (
-                    minion_board + weapon_board + hero_buff_board
-                    + spell_face + hp_direct + remain_hp
-                )
+                total = clear_face + spell_face + hp_direct
         else:
             total, _, _, _, _, _ = self._face_parts_from_fighters(
                 fs, spell_face, hp_direct, defender_shield,
@@ -1653,7 +1646,7 @@ class LethalChecker:
         rush_enable_face_if_no_enemy_minions(fs, enemy)
         living_taunts = self._living_taunt_states(enemy)
         if living_taunts:
-            _, clear_ls, can_clear = self._simulate_taunt_clear_from_state(
+            clear_face, clear_ls, can_clear = self._simulate_taunt_clear_from_state(
                 fs, living_taunts, defender_shield,
                 extra_lifesteal_heal=spell_ls,
                 enemy_board=enemy,
@@ -1680,11 +1673,12 @@ class LethalChecker:
                     enemy_board=enemy,
                     battlecry_face=battlecry_face,
                 )
-            minion_board, weapon_board, hero_buff_board, remain_hp = (
-                self._split_fighter_face(fs, defender_shield)
-            )
-            hp_board = hp_direct + remain_hp
             spell_face = self._spell_face_including_stolen(fs, spell_face, defender_shield)
+            # clear_face 已是清嘲后最优剩余打脸；攻击已耗尽，勿再 split 重算
+            minion_board = clear_face
+            weapon_board = 0
+            hero_buff_board = 0
+            hp_board = hp_direct
             total = (
                 minion_board + weapon_board + hero_buff_board
                 + spell_face + battlecry_face + hp_board
@@ -1832,12 +1826,8 @@ class LethalChecker:
                 )
                 clear_board_total = 0
                 if can_clear:
-                    minion_board, weapon_board, hero_buff_board, remain_hp = (
-                        self._split_fighter_face(fs, defender_shield)
-                    )
                     clear_board_total = (
-                        minion_board + weapon_board + hero_buff_board
-                        + spell_face + hp_direct + remain_hp
+                        clear_face + spell_face + hp_direct
                     )
                 elif spell_face > 0 or hp_direct > 0:
                     clear_board_total = spell_face + hp_direct
@@ -1873,10 +1863,10 @@ class LethalChecker:
                             enemy_board=enemy,
                         ))
                 else:
-                    minion_board, weapon_board, hero_buff_board, remain_hp = (
-                        self._split_fighter_face(fs, defender_shield)
-                    )
-                    hp_board = hp_direct + remain_hp
+                    minion_board = clear_face
+                    weapon_board = 0
+                    hero_buff_board = 0
+                    hp_board = hp_direct
                     spell_face = self._spell_face_including_stolen(
                         fs, spell_face, defender_shield,
                     )
@@ -3656,17 +3646,17 @@ class LethalChecker:
                             spell_face + hp_direct, 0, 0, spell_face, hp_direct, 0,
                         )
                 else:
-                    minion_board, weapon_board, hero_buff_board, remain_hp = (
-                        self._split_fighter_face(fs, defender_shield)
-                    )
                     spell_face = self._spell_face_including_stolen(
                         fs, spell_face, defender_shield,
                     )
+                    minion_board = board_face
+                    weapon_board = 0
+                    hero_buff_board = 0
                     total = (
                         minion_board + weapon_board + hero_buff_board
-                        + spell_face + hp_direct + remain_hp
+                        + spell_face + hp_direct
                     )
-                    hp_face = hp_direct + remain_hp
+                    hp_face = hp_direct
             else:
                 total, minion_board, weapon_board, spell_face, hp_face, hero_buff_board = (
                     self._face_parts_from_fighters(
@@ -3976,7 +3966,23 @@ class LethalChecker:
             )
             by_id[eid]["attacks_left"] += max(card.attacks_per_turn - used, 0)
 
+        from .spell_board import count_board_leokk, stamp_board_leokk_aura
+
+        leokk_n = count_board_leokk(self.game_state, player_id)
+        stamp_board_leokk_aura(list(by_id.values()), leokk_n)
+
         fighters = [f for f in by_id.values() if f["attacks_left"] > 0 and f["atk"] > 0]
+        # 场上有雷欧克但无人可攻击时，保留光环计数供手牌冲锋/召唤挂载
+        if leokk_n > 0 and not any(int(f.get("_board_leokk_count", 0) or 0) for f in fighters):
+            fighters.append({
+                "kind": "minion",
+                "card_id": "",
+                "atk": 0,
+                "health": 1,
+                "attacks_left": 0,
+                "can_face": False,
+                "_board_leokk_count": leokk_n,
+            })
 
         hero = self.game_state.get_hero(player_id)
         weapon = self.game_state.get_weapon(player_id)
@@ -4426,7 +4432,11 @@ class LethalChecker:
         board = _clone_combat_states(enemy_board if enemy_board is not None else taunts)
         if not taunts:
             fs = _clone_combat_states(fighters)
-            return self._fighters_face_damage(fs, defender_shield), 0, fs, board
+            face = self._fighters_face_damage(fs, defender_shield)
+            # 打脸模拟会叠影犬等攻击时 buff，但不会扣 attacks_left；
+            # 必须耗尽，避免调用方再 _split_fighter_face 把同一批打脸算两遍。
+            self._consume_attacks(fs)
+            return face, 0, fs, board
 
         if not any(f["attacks_left"] > 0 and f["health"] > 0 for f in fighters):
             return None, 0, None, board

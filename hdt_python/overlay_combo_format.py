@@ -286,6 +286,7 @@ def overlay_minion_face_bonus_paren(checker: "LethalChecker") -> str:
     """按当前 Overlay 分项生成场面打脸增量标注。"""
     pure, minion_bd, _, _, _ = checker.overlay_board_breakdown()
     hand_charge = checker.overlay_hand_charge_face()
+    # 场面分项已含手牌冲锋；标 BUFF/清场前先扣掉，冲锋由独立步骤列出
     display_minion = max(0, minion_bd - hand_charge)
     clear_bonus, buff_bonus = split_minion_face_bonus(
         pure, display_minion, overlay_open_board_face(checker),
@@ -294,7 +295,7 @@ def overlay_minion_face_bonus_paren(checker: "LethalChecker") -> str:
 
 
 def _board_face_step_label(checker: "LethalChecker", minion_face: int) -> str:
-    """场面随从打脸：清场增量标「法术清场」，真 BUFF 标「含BUFF」。"""
+    """场面随从打脸：清场增量标「法术清场」，真 BUFF 标「含BUFF」（不含手牌冲锋）。"""
     if minion_face <= 0:
         return "场面随从打脸"
     suffix = overlay_minion_face_bonus_paren(checker)

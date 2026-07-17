@@ -848,17 +848,34 @@ def _grant_rush_on_buff_target(
     fighters: List[dict],
     picked: tuple,
 ) -> None:
-    """战吼赋予突袭：可调度的随从获得 1 次攻击（不能打脸，除非原本就能打脸）。"""
+    """战吼赋予突袭：可获得 1 次攻击；新建突袭不能打脸，原本可打脸则保留。"""
     src, key, _unit = picked
-    if src != "fighter":
+    target = None
+    idx = None
+    if src == "fighter":
+        idx = int(key)
+        fighters[idx] = dict(fighters[idx])
+        target = fighters[idx]
+    else:
+        eid = key
+        for i, f in enumerate(fighters):
+            if f.get("entity_id") == eid and f.get("kind") == "minion":
+                fighters[i] = dict(f)
+                idx = i
+                target = fighters[i]
+                break
+    if target is None or idx is None:
         return
-    i = int(key)
-    fighters[i] = dict(fighters[i])
-    fighters[i]["rush"] = True
-    if fighters[i].get("attacks_left", 0) <= 0 and not fighters[i].get("charge"):
-        fighters[i]["attacks_left"] = 1
-        if not fighters[i].get("can_face", False):
-            fighters[i]["can_face"] = False
+    had_face = bool(target.get("can_face"))
+    had_attacks = int(target.get("attacks_left", 0) or 0) > 0
+    target["rush"] = True
+    if not target.get("charge") and int(target.get("attacks_left", 0) or 0) <= 0:
+        target["attacks_left"] = 1
+    # 仅靠本次突袭才动手：当回合不能打脸；原本就能出手打脸则保留
+    if had_face and had_attacks:
+        target["can_face"] = True
+    else:
+        target["can_face"] = bool(target.get("charge"))
 
 
 def _apply_defias_smuggler(
@@ -877,6 +894,10 @@ def _apply_defias_smuggler(
         for u in f
         if u.get("kind") == "minion" and u.get("health", 0) > 0
     }
+    if gs is not None and player_id is not None:
+        for m in gs.get_board(player_id):
+            if m.current_health > 0 and m.entity_id is not None:
+                before_ids.add(m.entity_id)
     _summon_friendly_fighter(f, 3 * mult, 3 * mult, card_id="JAIL_998")
     if not before_ids:
         return SpellApplyResult()
@@ -992,6 +1013,17 @@ def _apply_sunspot_dragon(
     return res
 
 
+def _apply_leokk(
+    taunts, fighters, *, mult, enemy_shield, **_kw,
+) -> SpellApplyResult:
+    """雷欧克：下场光环使其他友方随从 +1 攻（本回合自身失调）。"""
+    for _ in range(max(1, int(mult))):
+        _summon_friendly_fighter(
+            fighters, 2, 4, card_id="NEW1_033",
+        )
+    return SpellApplyResult()
+
+
 def _register_p0_battlecry() -> None:
     specs = [
         # 1. 直伤
@@ -1069,6 +1101,7 @@ def _register_p0_battlecry() -> None:
         (("REV_934",), 6, "屠戮者奥格拉", _apply_ogrillon, False),
         (("GDB_855",), 8, "吞星兽", _apply_star_eater, False),
         (("EDR_464",), 7, "泰兰德", _apply_tyrande, False),
+        (("NEW1_033", "VAN_NEW1_033"), 3, "雷欧克", _apply_leokk, False),
     ]
     for card_ids, cost, name, fn, uses_random in specs:
         _register_bc(

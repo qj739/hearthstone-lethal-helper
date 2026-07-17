@@ -11,7 +11,9 @@ if TYPE_CHECKING:
     from .lethal_checker import LethalChecker
 
 # 影犬及注能 token：攻击后使其他野兽 +2/+2
-SHADEHOUND_CARD_IDS = frozenset({"MAW_009", "MAW_009t"})
+SHADEHOUND_CARD_IDS = frozenset({
+    "MAW_009", "MAW_009t", "CORE_MAW_009", "CORE_MAW_009t",
+})
 
 # 场面随从 card_id → 攻击特效（打出时另由 rush_p0 写入 infused cleave 等）
 BOARD_ATTACK_EFFECTS = {
@@ -24,6 +26,8 @@ BOARD_ATTACK_EFFECTS = {
     "JAM_004": {"cleave": True},
     "MAW_009": {"buff_other_beasts_on_attack": (2, 2)},
     "MAW_009t": {"buff_other_beasts_on_attack": (2, 2)},
+    "CORE_MAW_009": {"buff_other_beasts_on_attack": (2, 2)},
+    "CORE_MAW_009t": {"buff_other_beasts_on_attack": (2, 2)},
 }
 
 
@@ -50,6 +54,8 @@ def stamp_fighter_attack_effects(fighter: dict, card_id: str = "", *, infused_cl
         fighter["mana_restore_on_attack"] = True
     if effects.get("buff_other_beasts_on_attack"):
         fighter["buff_other_beasts_on_attack"] = effects["buff_other_beasts_on_attack"]
+    if cid in SHADEHOUND_CARD_IDS:
+        fighter["beast"] = True
 
 
 def apply_buff_other_beasts_after_attack(attacker: dict, fighters: List[dict]) -> None:
@@ -92,17 +98,8 @@ def simulate_minion_face_hits(
     from .secret_attack_board import crusader_strike_attack, apply_crusader_buff_after_strike
 
     hits: List[int] = []
-    # 突袭影犬等：当回合不能打脸，但解场攻击仍会 buff 其他野兽
-    for f in fighters:
-        if not f.get("buff_other_beasts_on_attack"):
-            continue
-        if f.get("health", 0) <= 0 or f.get("attacks_left", 0) <= 0:
-            continue
-        if f.get("can_face", True):
-            continue
-        for _ in range(f.get("attacks_left", 0)):
-            apply_buff_other_beasts_after_attack(f, fighters)
-
+    # 突袭影犬的 +2/+2 必须在真实解场攻击路径里结算（exhaust_rush / after_minion_attack）；
+    # 这里不得对 can_face=False 的单位「凭空攻击」叠 buff，否则会重复抬场攻。
     face_fighters = [
         f for f in fighters
         if f.get("can_face", True)

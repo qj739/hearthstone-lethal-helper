@@ -287,30 +287,18 @@ def _apply_sizzling_swarm(taunts, fighters, *, mult, enemy_shield, spell_power=0
     return res
 
 
-def _apply_leokk_aura(fighters: List[dict], *, mult: int = 1) -> None:
-    """Leokk：你的其他随从 +1 攻。"""
-    for unit in fighters:
-        if unit.get("kind") != "minion" or int(unit.get("health", 0) or 0) <= 0:
-            continue
-        if unit.get("card_id") == "NEW1_033":
-            continue
-        unit["atk"] = int(unit.get("atk", 0) or 0) + 1 * mult
-
-
 def _apply_call_of_the_wild(
     taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw,
 ) -> SpellApplyResult:
-    """兽群呼唤：召唤米莎、雷欧克、霍弗；霍弗冲锋，雷欧克给其他随从 +1 攻。"""
+    """兽群呼唤：召唤米莎、雷欧克、霍弗；霍弗冲锋，雷欧克光环经 summon 自动挂到其他随从。"""
     m = _sd(1, mult=mult, spell_power=spell_power)
     _summon_friendly_fighter(
         fighters, 4 * m, 4 * m, taunt=True, card_id="NEW1_032",
     )
     _summon_friendly_fighter(fighters, 2 * m, 4 * m, card_id="NEW1_033")
-    _apply_leokk_aura(fighters, mult=m)
     _summon_friendly_fighter(
         fighters, 4 * m, 2 * m, charge=True, card_id="NEW1_034",
     )
-    _apply_leokk_aura(fighters, mult=m)
     return SpellApplyResult()
 
 

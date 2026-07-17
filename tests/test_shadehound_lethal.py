@@ -188,6 +188,118 @@ def test_shadehound_after_taunt_clear():
     assert has_lethal, f"shadehound clear taunt then buffed beast should lethal total={total}"
 
 
+def test_infused_shadehound_from_hand_buffs_beasts():
+    """注能影犬从手牌打出：突袭解嘲后其他野兽 +2/+2 应进斩杀。"""
+    from hdt_python.rush_board import get_rush_def
+
+    assert get_rush_def("MAW_009t") is not None
+
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.active_player_id = 1
+    gs.in_game = True
+    _hero(gs, 10, 1)
+    gs.get_entity(10).tags["RESOURCES"] = 10
+    gs.get_entity(10).tags["RESOURCES_USED"] = 0
+    opp = _hero(gs, 20, 2)
+    opp.tags["DAMAGE"] = 23  # 7 血
+    opp.damage = 23
+    for eid in (30, 31, 32, 33):
+        _minion(gs, eid, 1, 3, 3, card_id="REV_350t", beast=True)
+    t1 = _minion(gs, 40, 2, 1, 1, card_id="TOY_380t")
+    t1.tags["TAUNT"] = 1
+    t2 = _minion(gs, 41, 2, 3, 7, card_id="TOY_380")
+    t2.tags["TAUNT"] = 1
+    h = gs.get_entity(50)
+    h.cardtype = "MINION"
+    h.controller = 1
+    h.zone = "HAND"
+    h.card_id = "MAW_009t"
+    h.cost = 5
+    h.atk = 6
+    h.health = 5
+    h.tags.update({
+        "ZONE": "HAND", "COST": 5, "ATK": 6, "HEALTH": 5, "479": 6,
+        "RUSH": 1, "CARDRACE": "BEAST",
+    })
+
+    lc = LethalChecker(gs)
+    face = lc.overlay_board_face_damage()
+    # 影犬打 1 血嘲 → 四只野兽 5 攻；再解 7 血嘲后打脸应远超 7
+    assert face >= 7, f"expected lethal face>=7 got {face}; {lc.overlay_combo_display_lines()}"
+    _, _, lethal = lc.calculate_lethal_potential()
+    assert lethal, (face, lc.overlay_combo_display_lines())
+
+
+def test_shadehound_hand_recognized_without_rush_tag():
+    """高亮注能影犬偶发无 RUSH 标签时，仍应进手牌突袭搜索。"""
+    from hdt_python.rush_board import hand_rush_minions
+
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    _hero(gs, 10, 1)
+    gs.get_entity(10).tags["RESOURCES"] = 10
+    gs.get_entity(10).tags["RESOURCES_USED"] = 0
+    h = gs.get_entity(50)
+    h.cardtype = "MINION"
+    h.controller = 1
+    h.zone = "HAND"
+    h.card_id = "MAW_009t"
+    h.cost = 5
+    h.atk = 6
+    h.health = 5
+    h.tags.update({
+        "ZONE": "HAND", "COST": 5, "ATK": 6, "HEALTH": 5, "479": 6,
+        "INFUSED": 1, "CARDRACE": "BEAST",
+        # 故意不写 RUSH
+    })
+    plays = hand_rush_minions(gs, 1, 10)
+    assert any(c.card_id == "MAW_009t" for c, _, _ in plays), plays
+
+
+def test_two_shadehounds_face_not_double_counted():
+    """场上影犬 + 手牌注能影犬：清嘲后打脸不应把影犬 buff 算两遍。"""
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.active_player_id = 1
+    gs.in_game = True
+    _hero(gs, 10, 1)
+    gs.get_entity(10).tags["RESOURCES"] = 10
+    gs.get_entity(10).tags["RESOURCES_USED"] = 0
+    opp = _hero(gs, 20, 2)
+    opp.tags["DAMAGE"] = 16  # 14 血
+    opp.damage = 16
+    # 可打脸的场上影犬（已过一回合）
+    board_sh = _minion(gs, 277, 1, 6, 5, card_id="MAW_009", beast=True)
+    board_sh.tags["NUM_TURNS_IN_PLAY"] = 2
+    _minion(gs, 283, 1, 2, 1, card_id="JAIL_877t", beast=True).tags["NUM_TURNS_IN_PLAY"] = 2
+    _minion(gs, 203, 1, 1, 4, card_id="END_015", beast=True).tags["NUM_TURNS_IN_PLAY"] = 2
+    for eid, hp in ((288, 5), (297, 5), (298, 5)):
+        t = _minion(gs, eid, 2, 3, hp, card_id="CS2_200")
+        t.tags["TAUNT"] = 1
+    h = gs.get_entity(4)
+    h.cardtype = "MINION"
+    h.controller = 1
+    h.zone = "HAND"
+    h.card_id = "MAW_009t"
+    h.cost = 5
+    h.atk = 6
+    h.health = 5
+    h.tags.update({
+        "ZONE": "HAND", "COST": 5, "ATK": 6, "HEALTH": 5, "479": 6,
+        "RUSH": 1, "CARDRACE": "BEAST", "INFUSED": 1,
+    })
+
+    lc = LethalChecker(gs)
+    face = lc.overlay_board_face_damage()
+    # 虚高常见为 18；正确上界应明显低于把 buff 叠两次的结果
+    assert face < 18, (face, lc.overlay_combo_display_lines(), lc.overlay_spell_note())
+    assert lc._overlay_board_face <= 14, lc._overlay_board_face
+
+
 if __name__ == "__main__":
     test_power_parser_stores_cardrace_beast()
     test_power_log_before_shadehound_attack_simulates_buff()
@@ -195,4 +307,7 @@ if __name__ == "__main__":
     test_shadehound_buffs_other_beast_face_damage()
     test_shadehound_does_not_buff_self()
     test_shadehound_after_taunt_clear()
+    test_infused_shadehound_from_hand_buffs_beasts()
+    test_shadehound_hand_recognized_without_rush_tag()
+    test_two_shadehounds_face_not_double_counted()
     print("ok")

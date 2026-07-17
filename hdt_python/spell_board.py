@@ -826,6 +826,107 @@ def _next_summon_entity_id(fighters: List[dict]) -> int:
     return eid
 
 
+# 雷欧克：你的其他随从拥有 +1 攻击力（光环）
+LEOKK_CARD_IDS = frozenset({"NEW1_033", "VAN_NEW1_033", "CORE_NEW1_033"})
+
+
+def _is_leokk_card_id(card_id: str) -> bool:
+    cid = card_id or ""
+    if cid in LEOKK_CARD_IDS:
+        return True
+    if cid.startswith("CORE_") and cid[5:] in LEOKK_CARD_IDS:
+        return True
+    return False
+
+
+def _living_active_leokk_count(fighters: List[dict]) -> int:
+    """fighters 中存活的雷欧克数量；若无本体则回退 _board_leokk_count 标记。"""
+    n = 0
+    for f in fighters:
+        if f.get("kind") != "minion":
+            continue
+        if int(f.get("health", 0) or 0) <= 0:
+            continue
+        if f.get("silenced"):
+            continue
+        if _is_leokk_card_id(str(f.get("card_id") or "")):
+            n += 1
+    if n > 0:
+        return n
+    marked = 0
+    for f in fighters:
+        marked = max(marked, int(f.get("_board_leokk_count", 0) or 0))
+    return marked
+
+
+def count_board_leokk(gs: "GameState", player_id: int) -> int:
+    """场上存活且未沉默的雷欧克数量（含本回合无法攻击的）。"""
+    from .board_damage import is_silenced
+
+    n = 0
+    for entity in gs.get_board(player_id):
+        if not getattr(entity, "is_minion", False):
+            continue
+        if int(getattr(entity, "current_health", 0) or 0) <= 0:
+            continue
+        if is_silenced(entity):
+            continue
+        if _is_leokk_card_id(entity.card_id or ""):
+            n += 1
+    return n
+
+
+def stamp_board_leokk_aura(fighters: List[dict], leokk_count: int) -> None:
+    """场攻读入时 ATK 已含光环：只打标记，避免模拟再叠一次。"""
+    if leokk_count <= 0:
+        return
+    for f in fighters:
+        if f.get("kind") != "minion":
+            continue
+        f["_board_leokk_count"] = leokk_count
+        if _is_leokk_card_id(str(f.get("card_id") or "")):
+            f["leokk_aura_stacks"] = max(leokk_count - 1, 0)
+        else:
+            f["leokk_aura_stacks"] = leokk_count
+
+
+def apply_leokk_aura_on_minion_added(fighters: List[dict], new_unit: dict) -> None:
+    """
+    友方随从加入场面时结算雷欧克光环：
+    - 新进雷欧克：其他存活随从各 +1
+    - 其他新进随从：按当前雷欧克数补足 +N
+    """
+    if new_unit.get("kind") != "minion":
+        return
+    if int(new_unit.get("health", 0) or 0) <= 0:
+        return
+
+    if _is_leokk_card_id(str(new_unit.get("card_id") or "")) and not new_unit.get("silenced"):
+        for u in fighters:
+            if u is new_unit or u.get("kind") != "minion":
+                continue
+            if int(u.get("health", 0) or 0) <= 0:
+                continue
+            u["atk"] = int(u.get("atk", 0) or 0) + 1
+            u["leokk_aura_stacks"] = int(u.get("leokk_aura_stacks", 0) or 0) + 1
+        for u in fighters:
+            u["_board_leokk_count"] = int(u.get("_board_leokk_count", 0) or 0) + 1
+        return
+
+    want = _living_active_leokk_count(fighters)
+    # 新单位本身若在 count 里且是雷欧克已在上面处理；此处 other 随从
+    have = int(new_unit.get("leokk_aura_stacks", 0) or 0)
+    # 若 count 来自 stamp，且新单位刚加入时列表里尚无雷欧克本体，want 已含 stamp
+    delta = want - have
+    if delta > 0:
+        new_unit["atk"] = int(new_unit.get("atk", 0) or 0) + delta
+        new_unit["leokk_aura_stacks"] = have + delta
+    if want > 0:
+        new_unit["_board_leokk_count"] = max(
+            int(new_unit.get("_board_leokk_count", 0) or 0), want,
+        )
+
+
 def _summon_friendly_fighter(
     fighters: List[dict],
     atk: int,
@@ -851,7 +952,7 @@ def _summon_friendly_fighter(
         attacks_left, can_face = (2 if windfury else 1), False
     else:
         attacks_left, can_face = 0, False
-    fighters.append({
+    unit = {
         "kind": "minion",
         "entity_id": _next_summon_entity_id(fighters),
         "card_id": card_id,
@@ -867,7 +968,9 @@ def _summon_friendly_fighter(
         "charge": charge,
         "windfury": windfury,
         "from_hero_power": from_hero_power,
-    })
+    }
+    fighters.append(unit)
+    apply_leokk_aura_on_minion_added(fighters, unit)
 
 
 def _add_temp_hero_attack(
@@ -1740,6 +1843,8 @@ _SPELL_SIM_TIER_OVERRIDES: Dict[str, SpellSimTier] = {
     "EX1_277": SpellSimTier.DIRECT_FACE,        # 奥术飞弹 3 随机所有敌人
     "CORE_EX1_277": SpellSimTier.DIRECT_FACE,
     "VAN_EX1_277": SpellSimTier.DIRECT_FACE,
+    "JAIL_881": SpellSimTier.DIRECT_FACE,       # 奥术绊索 5 随机所有敌人
+    "JAIL_881t": SpellSimTier.DIRECT_FACE,      # 奥术绊索·抽到触发
     "END_014": SpellSimTier.UTILITY,            # 协作火花 3 伤 + 击杀 buff +3/+3
     "ETC_201": SpellSimTier.UTILITY,            # 一串香蕉 +1/+1 ×3
     "ETC_201t": SpellSimTier.UTILITY,

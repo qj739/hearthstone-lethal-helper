@@ -191,6 +191,12 @@ def _apply_hollow_hound(t, f, *, mult, **_kw) -> SpellApplyResult:
     return SpellApplyResult()
 
 
+def _apply_shadehound(t, f, *, mult, card=None, **_kw) -> SpellApplyResult:
+    """影犬（注能 MAW_009t）：突袭；攻击时使其他友方野兽 +2/+2。"""
+    _summon_from_hand_card(f, card, mult=mult)
+    return SpellApplyResult()
+
+
 def _apply_felrattler(t, f, *, mult, **_kw) -> SpellApplyResult:
     _summon_rush_fighter(f, 3 * mult, 2 * mult, "CORE_WC_701")
     return SpellApplyResult()
@@ -223,6 +229,11 @@ _RUSH_OVERRIDES = {
     "CORE_DRG_079": (6, "辟法巨龙", _apply_evasive_wyrm),
     "TOY_811": (3, "绒绒虎", _apply_tigress_plushy),
     "JAM_004": (6, "镂骨恶犬", _apply_hollow_hound),
+    "MAW_009t": (5, "影犬", _apply_shadehound),
+    "CORE_MAW_009t": (5, "影犬", _apply_shadehound),
+    # 未注能牌面无突袭；手牌若已亮边/获得突袭也可按同逻辑召唤
+    "MAW_009": (5, "影犬", _apply_shadehound),
+    "CORE_MAW_009": (5, "影犬", _apply_shadehound),
     "CORE_WC_701": (3, "邪能响尾蛇", _apply_felrattler),
     "TOY_516": (3, "折价区海盗", _apply_bargain_bin_buccaneer),
 }
@@ -266,6 +277,15 @@ def _register_all_rush_minions() -> None:
             (cid,), cost or 0, name, _apply_default_rush_minion,
             uses_random=cid in _RANDOM_RUSH_IDS,
         ))
+    # 覆盖表中但未进突袭清单的牌（如注能后才有突袭的影犬 MAW_009t）
+    for cid, (base_cost, zh, apply_fn) in _RUSH_OVERRIDES.items():
+        if cid in seen or cid in BOARD_BATTLECRY or cid in BOARD_RUSH:
+            continue
+        _register_rush(BoardSpellDef(
+            (cid,), base_cost, zh, apply_fn,
+            uses_random=cid in _RANDOM_RUSH_IDS,
+        ))
+        seen.add(cid)
 
 
 _register_all_rush_minions()

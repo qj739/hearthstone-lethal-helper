@@ -304,8 +304,13 @@ def exhaust_rush_on_enemy_minions(
                     continue
                 apply_single_attack(r2, t2)
                 _sync_minion_death_on_boards(r2, t2, fs2, board2)
+                # 影犬等：突袭换随从也要触发「攻击后其他野兽 +2/+2」
+                from .rush_combat import apply_buff_other_beasts_after_attack
+
+                apply_buff_other_beasts_after_attack(r2, fs2)
                 if score_after is not None:
-                    score = score_after(fs2, board2)
+                    # 评分不得污染候选局面（否则后续攻击会在已被评分吞掉的状态上继续）
+                    score = score_after(copy.deepcopy(fs2), copy.deepcopy(board2))
                 else:
                     score = fighters_face_damage(fs2, defender_shield)
                 if score > best_score:

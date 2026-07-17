@@ -104,7 +104,47 @@ def test_defias_smuggler_enables_lethal():
     assert lethal, f"should detect lethal total={total} face={face}"
 
 
+def test_defias_smuggler_rush_on_exhausted_clears_taunt():
+    """仅疲劳友方时：战吼仍应 +2 并赋予突袭（可解嘲，当回合不打脸）。"""
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.active_player_id = 1
+    gs.in_game = True
+    _hero(gs, 10, 1, mana=10)
+    _hero(gs, 20, 2, dmg=20)
+    sick = _minion(gs, 31, 1, 4, 4, card_id="sick", exhausted=True)
+    sick.tags["NUM_TURNS_IN_PLAY"] = 0
+    fighters: list = []
+    taunts = [{"kind": "minion", "entity_id": 50, "atk": 1, "health": 2,
+               "taunt": True, "shield": False}]
+    _apply_defias_smuggler(taunts, fighters, mult=1, gs=gs, player_id=1)
+    target = next(f for f in fighters if f.get("entity_id") == 31)
+    assert target["atk"] == 6, target
+    assert target.get("rush") is True, target
+    assert target.get("attacks_left", 0) >= 1, target
+    assert target.get("can_face") is False, target
+
+    # 有可攻友方时：+2 计入斩杀打脸
+    gs2 = GameState()
+    gs2.local_player_id = 1
+    gs2.opponent_player_id = 2
+    gs2.active_player_id = 1
+    gs2.in_game = True
+    _hero(gs2, 10, 1, mana=10)
+    _hero(gs2, 20, 2, dmg=24)  # 6 血
+    ready = _minion(gs2, 30, 1, 5, 5, card_id="ready")
+    ready.tags["NUM_TURNS_IN_PLAY"] = 2
+    _hand_minion(gs2, 40, 1, "JAIL_998", 3)
+    lc = LethalChecker(gs2)
+    face = lc.overlay_board_face_damage()
+    assert face >= 7, face
+    _, _, lethal = lc.calculate_lethal_potential()
+    assert lethal
+
+
 if __name__ == "__main__":
     test_defias_smuggler_registered_and_buffs()
     test_defias_smuggler_enables_lethal()
+    test_defias_smuggler_rush_on_exhausted_clears_taunt()
     print("ok")

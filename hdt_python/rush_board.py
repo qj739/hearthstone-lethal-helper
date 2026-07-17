@@ -31,12 +31,22 @@ def hand_rush_minions(
 ) -> List[Tuple["Entity", BoardSpellDef, int]]:
     """可打出的手牌突袭随从（已排除 BOARD_BATTLECRY 已注册项）。"""
     from .battlecry_board import get_battlecry_def
+    from .rush_combat import SHADEHOUND_CARD_IDS
 
     result: List[Tuple[Entity, BoardSpellDef, int]] = []
     for card in gs.get_hand(player_id):
-        if not hand_minion_has_rush(card):
-            continue
         cid = card.card_id or ""
+        # 注能影犬：牌面/高亮后应为突袭；日志偶发尚未写上 RUSH 时也认
+        infused_shadehound = (
+            cid in SHADEHOUND_CARD_IDS
+            and (
+                cid.endswith("t")
+                or int(card.tags.get("INFUSED", 0) or 0) == 1
+                or int(card.tags.get("RUSH", 0) or 0) == 1
+            )
+        )
+        if not hand_minion_has_rush(card) and not infused_shadehound:
+            continue
         if get_battlecry_def(cid):
             continue
         defn = get_rush_def(cid)

@@ -18,6 +18,35 @@ import sys
 import time
 from pathlib import Path
 
+
+def _configure_stdio() -> None:
+    """Windows 控制台默认常为 GBK，emoji/部分中文 print 会 UnicodeEncodeError 导致 EXE 闪退。"""
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        if stream is None:
+            continue
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+            continue
+        except Exception:
+            pass
+        try:
+            import io
+
+            buf = getattr(stream, "buffer", None)
+            if buf is None:
+                continue
+            setattr(
+                sys,
+                name,
+                io.TextIOWrapper(buf, encoding="utf-8", errors="replace", line_buffering=True),
+            )
+        except Exception:
+            pass
+
+
+_configure_stdio()
+
 from hdt_python.app_paths import is_frozen, user_data_dir
 from hdt_python.player_identity import format_identity_summary
 
@@ -791,6 +820,11 @@ class HearthstoneTracker:
     def run(self):
         """运行追踪器"""
         if not self.setup():
+            if is_frozen():
+                try:
+                    input("\n按回车退出…")
+                except Exception:
+                    time.sleep(8)
             return
 
         print("\n" + "=" * 60)
@@ -915,4 +949,17 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass
+    except Exception:
+        import traceback
+
+        traceback.print_exc()
+        if is_frozen():
+            try:
+                input("\n程序异常退出，按回车关闭…")
+            except Exception:
+                time.sleep(15)
+        raise

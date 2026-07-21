@@ -506,7 +506,11 @@ def build_lethal_combo_lines(checker: "LethalChecker") -> List[str]:
             if local_board:
                 from .end_turn_board import end_turn_names_on_board
 
-                names = end_turn_names_on_board(local_board)
+                names = end_turn_names_on_board(
+                    local_board,
+                    game_state=checker.game_state,
+                    player_id=local,
+                )
             et_label = names[0] if len(names) == 1 else "回合结束触发"
             attack_steps = list(attack_steps) + [f"{et_label}打脸+{et_face}"]
         if attack_steps:

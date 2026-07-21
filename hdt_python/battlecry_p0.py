@@ -445,7 +445,15 @@ def _apply_burrowing_scorpid(t, f, *, mult, enemy_shield, **_kw):
 
 
 def _apply_stoneborn_accuser(t, f, *, mult, enemy_shield, card=None, **_kw):
-    if not hand_effect_active(card):
+    """石裔指控者：注能后 / REV_013t 战吼造成 5 点伤害。"""
+    cid = (card.card_id if card is not None else "") or ""
+    infused = cid in ("REV_013t",) or (
+        card is not None and (
+            int(card.tags.get("INFUSED", 0) or 0) == 1
+            or hand_effect_active(card)
+        )
+    )
+    if not infused:
         return SpellApplyResult()
     return _apply_optimal_single_target_damage(
         t, f, 5 * mult, enemy_shield=enemy_shield,
@@ -1019,9 +1027,44 @@ def _apply_leokk(
     """雷欧克：下场光环使其他友方随从 +1 攻（本回合自身失调）。"""
     for _ in range(max(1, int(mult))):
         _summon_friendly_fighter(
-            fighters, 2, 4, card_id="NEW1_033",
+            fighters, 2, 4, card_id="NEW1_033", aura=True,
         )
     return SpellApplyResult()
+
+
+def _apply_team_spirit(t, f, *, mult, enemy_shield, **_kw) -> SpellApplyResult:
+    """团队之灵：潜行一回合；你的回合英雄 +2 攻（光环，本回合可挥击）。"""
+    _summon_friendly_fighter(
+        f, 0, 3 * mult, card_id="TOY_028", aura=True,
+    )
+    _add_temp_hero_attack(f, 2 * mult)
+    return SpellApplyResult()
+
+
+def _apply_manifested_timeways(
+    taunts,
+    fighters,
+    *,
+    mult,
+    enemy_shield,
+    card=None,
+    gs=None,
+    player_id=None,
+    **_kw,
+) -> SpellApplyResult:
+    """时间流具象：战吼——若控制光环，对所有敌人造成 3 点伤害。"""
+    from .battlecry_board import timeways_aura_condition_met
+
+    atk = hand_minion_attack(card) if card is not None else 3
+    hp = hand_minion_health(card) if card is not None else 3
+    _summon_friendly_fighter(
+        fighters, atk * mult, hp * mult, card_id="TIME_019",
+    )
+    if not timeways_aura_condition_met(card, gs, player_id, fighters):
+        return SpellApplyResult()
+    return _apply_all_enemies_damage(
+        taunts, fighters, 3 * mult, enemy_shield=enemy_shield,
+    )
 
 
 def _register_p0_battlecry() -> None:
@@ -1038,7 +1081,7 @@ def _register_p0_battlecry() -> None:
         (("YOG_519",), 5, "腐化残渣", _apply_tainted_remnant, True),
         (("REV_906", "CORE_REV_906"), 10, "德纳修斯大帝", _apply_sire_denathrius, True),
         (("BT_717",), 4, "潜地蝎", _apply_burrowing_scorpid, False),
-        (("REV_013",), 5, "石裔指控者", _apply_stoneborn_accuser, False),
+        (("REV_013", "REV_013t", "CORE_REV_013"), 5, "石裔指控者", _apply_stoneborn_accuser, False),
         (("WW_906",), 4, "吵闹的伴侣", _apply_rowdy_partner, False),
         (("TSC_064",), 7, "蛇行死鳞纳迦", _apply_slithering_deathscale, False),
         (("RLK_222",), 2, "阿斯塔洛·血誓", _apply_astalor, False),
@@ -1102,6 +1145,8 @@ def _register_p0_battlecry() -> None:
         (("GDB_855",), 8, "吞星兽", _apply_star_eater, False),
         (("EDR_464",), 7, "泰兰德", _apply_tyrande, False),
         (("NEW1_033", "VAN_NEW1_033"), 3, "雷欧克", _apply_leokk, False),
+        (("TOY_028",), 2, "团队之灵", _apply_team_spirit, False),
+        (("TIME_019",), 4, "时间流具象", _apply_manifested_timeways, False),
     ]
     for card_ids, cost, name, fn, uses_random in specs:
         _register_bc(

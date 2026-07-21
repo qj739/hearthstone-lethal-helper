@@ -7,7 +7,14 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 
-from .board_damage import apply_divine_shield_to_hits, entity_cardtype, is_dormant, is_silenced
+from .board_damage import (
+    apply_divine_shield_to_hits,
+    entity_cardtype,
+    entity_zone,
+    is_dormant,
+    is_silenced,
+    is_players_turn,
+)
 
 if TYPE_CHECKING:
     from .power_parser import GameState
@@ -465,6 +472,62 @@ def _entity_alive_on_board(entity) -> bool:
     )
 
 
+def _dormant_awaken_enchant(game_state: "GameState", host_eid: int):
+    """挂在休眠随从上的唤醒倒计时附魔（如玛瑟 TOY_647e2 清扫）。"""
+    for e in list(game_state.entities.values()):
+        if int(e.tags.get("ATTACHED", 0) or 0) != host_eid:
+            continue
+        if int(e.tags.get("DORMANT_AWAKEN_CONDITION_ENCHANT", 0) or 0) != 1:
+            continue
+        if entity_zone(e) not in ("PLAY", "SETASIDE"):
+            continue
+        return e
+    return None
+
+
+def dormant_awakens_at_next_turn_start(
+    entity,
+    game_state: Optional["GameState"],
+) -> bool:
+    """
+    下一回合开始（MAIN_START_TRIGGERS）时是否会苏醒。
+
+    休眠倒计时附魔：SCORE_VALUE_1=总回合，SCORE_VALUE_2=已过回合；
+    每回合开始 +1，达到 SCORE_VALUE_1 时苏醒。玛瑟里顿在对手回合
+    SCORE_VALUE_2 通常已为 1，轮到我方时开局即醒，不再触发休眠回合结束。
+    """
+    if game_state is None:
+        return False
+    eid = getattr(entity, "entity_id", None)
+    if eid is None:
+        return False
+    enchant = _dormant_awaken_enchant(game_state, int(eid))
+    if enchant is None:
+        return False
+    total = int(enchant.tags.get("SCORE_VALUE_1", 0) or 0)
+    if total <= 0:
+        return False
+    progress = int(enchant.tags.get("SCORE_VALUE_2", 0) or 0)
+    return progress + 1 >= total
+
+
+def _skip_dormant_end_turn_next_turn_preview(
+    entity,
+    defn: EndTurnDef,
+    game_state: Optional["GameState"],
+    player_id: Optional[int],
+) -> bool:
+    """对方回合预览下回合时：若休眠随从会在开局苏醒，则不计其回合结束。"""
+    if not defn.requires_dormant:
+        return False
+    if game_state is None or player_id is None:
+        return False
+    # 仅在「当前不是该玩家回合」时做下回合预览
+    if is_players_turn(game_state, player_id):
+        return False
+    return dormant_awakens_at_next_turn_start(entity, game_state)
+
+
 def _end_turn_def_uses_random(defn: Optional[EndTurnDef], *, dormant: bool = False) -> bool:
     return bool(
         defn
@@ -596,6 +659,10 @@ def end_turn_face_damage(
             continue
         if defn.requires_dormant and not is_dormant(entity):
             continue
+        if _skip_dormant_end_turn_next_turn_preview(
+            entity, defn, game_state, player_id,
+        ):
+            continue
 
         face = _apply_end_turn_def(
             defn, entity, enemy_board, defender_shield, rng=rng,
@@ -658,6 +725,10 @@ def board_dormant_end_turn_face_now(
         defn = _resolve_end_turn_def(getattr(entity, "card_id", "") or "")
         if defn is None or not defn.requires_dormant or not is_dormant(entity):
             continue
+        if _skip_dormant_end_turn_next_turn_preview(
+            entity, defn, game_state, player_id,
+        ):
+            continue
         total += _apply_end_turn_def(
             defn, entity, enemy_board, defender_shield,
             hero_health=hero_health,
@@ -665,13 +736,25 @@ def board_dormant_end_turn_face_now(
     return total
 
 
-def end_turn_names_on_board(friendly_board_entities: List) -> List[str]:
+def end_turn_names_on_board(
+    friendly_board_entities: List,
+    *,
+    game_state: Optional["GameState"] = None,
+    player_id: Optional[int] = None,
+) -> List[str]:
     """场上已注册回合结束源的显示名。"""
     names: List[str] = []
     for entity in friendly_board_entities:
         if not _entity_alive_on_board(entity):
             continue
         defn = _resolve_end_turn_def(getattr(entity, "card_id", "") or "")
-        if defn and (not defn.requires_dormant or is_dormant(entity)):
-            names.append(defn.name or entity.card_id or "回合结束")
+        if not defn:
+            continue
+        if defn.requires_dormant and not is_dormant(entity):
+            continue
+        if _skip_dormant_end_turn_next_turn_preview(
+            entity, defn, game_state, player_id,
+        ):
+            continue
+        names.append(defn.name or entity.card_id or "回合结束")
     return names

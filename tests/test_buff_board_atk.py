@@ -74,13 +74,45 @@ def test_stale_exhausted_counts_buffed_atk():
 
 
 def test_enchantment_attack_when_479_lags():
-    """附魔 tag 323 已写入、随从 ATK 仍为牌面攻时仍应读到 BUFF 攻。"""
+    """附魔 tag 323 已写入、随从 ATK 仍低于牌面时，用牌面+附魔兜底。"""
     gs = GameState()
     gs.local_player_id = 1
-    m = _minion(gs, 10, 1, 2, turns=2, exhausted=0)
+    # ATK=0 < 牌面 2：模拟 tag 未刷到牌面身材
+    m = _minion(gs, 10, 1, 0, turns=2, exhausted=0)
+    m.atk = 0
+    m.tags["ATK"] = 0
+    m.tags["479"] = 0
     _enchantment(gs, 20, 10, 2)
     assert attached_enchantment_attack_bonus(gs, m) == 2
     assert _std_attack(m, gs) == 4
+
+
+def test_lifedrinker_set_atk_plus_auras_no_double():
+    """
+    吸血蚊：斗志有限变为1，再叠巴加斯特/雷欧克各+1 → ATK=3。
+    不可再按牌面3+附魔2算成5。
+    """
+    gs = GameState()
+    gs.local_player_id = 1
+    m = _minion(gs, 93, 1, 3, turns=8, exhausted=0, card_id="CORE_GIL_622")
+    for eid, cid, bonus in (
+        (149, "REV_353t4e", 1),
+        (175, "NEW1_033o", 1),
+    ):
+        e = gs.get_entity(eid)
+        e.cardtype = "ENCHANTMENT"
+        e.card_id = cid
+        e.zone = "PLAY"
+        e.tags.update({"ZONE": "PLAY", "ATTACHED": 93, "323": bonus})
+    # 斗志有限：无 323，但存在表示 ATK 已按「变为」结算
+    lim = gs.get_entity(121)
+    lim.cardtype = "ENCHANTMENT"
+    lim.card_id = "END_010ae"
+    lim.zone = "PLAY"
+    lim.tags.update({"ZONE": "PLAY", "ATTACHED": 93})
+
+    assert attached_enchantment_attack_bonus(gs, m) == 2
+    assert _std_attack(m, gs) == 3
 
 
 def test_chogall_arm_synced_tags_no_double_enchant():
@@ -177,6 +209,7 @@ def test_chogall_arm_pair_six_board_face():
 if __name__ == "__main__":
     test_stale_exhausted_counts_buffed_atk()
     test_enchantment_attack_when_479_lags()
+    test_lifedrinker_set_atk_plus_auras_no_double()
     test_chogall_arm_synced_tags_no_double_enchant()
     test_uld_163_expired_goods_script_not_attack()
     test_chogall_arm_pair_six_board_face()

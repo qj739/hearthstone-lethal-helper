@@ -30,6 +30,47 @@ TYRANDE_IDS = frozenset({"EDR_464"})
 TYRANDE_AURA_ENCHANT_IDS = frozenset({"EDR_464e2"})
 
 
+def player_controls_aura(
+    game_state: Optional["GameState"],
+    player_id: Optional[int],
+    fighters: Optional[List[dict]] = None,
+) -> bool:
+    """
+    是否控制着光环（卡牌关键字 AURA）。
+    时间流具象等：「如果你控制着光环」条件。
+    """
+    if fighters:
+        for unit in fighters:
+            if unit.get("kind") != "minion" or int(unit.get("health", 0) or 0) <= 0:
+                continue
+            if unit.get("aura"):
+                return True
+    if game_state is None or player_id is None:
+        return False
+    from .board_damage import entity_zone
+
+    for entity in list(game_state.entities.values()):
+        if getattr(entity, "controller", None) != player_id:
+            continue
+        if entity_zone(entity) != "PLAY":
+            continue
+        if int(entity.tags.get("AURA", 0) or 0) == 1:
+            return True
+    return False
+
+
+def timeways_aura_condition_met(
+    card: Optional["Entity"],
+    game_state: Optional["GameState"],
+    player_id: Optional[int],
+    fighters: Optional[List[dict]] = None,
+) -> bool:
+    """时间流具象战吼条件：手牌亮边 POWERED_UP，或场面/模拟线已有光环。"""
+    if card is not None and int(card.tags.get("POWERED_UP", 0) or 0) == 1:
+        return True
+    return player_controls_aura(game_state, player_id, fighters)
+
+
 def _tyrande_aura_attach_targets(
     game_state: "GameState",
     player_id: int,

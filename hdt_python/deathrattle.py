@@ -136,9 +136,13 @@ def _script_damage(dead: dict, default: int) -> int:
 
 
 def _living_enemy_minions(enemy_board: List[dict]) -> List[dict]:
+    from .combat_sim import unit_is_dormant
+
     return [
         m for m in enemy_board
-        if m.get("health", 0) > 0 and m.get("kind") not in ("hero", "sim_meta")
+        if m.get("health", 0) > 0
+        and m.get("kind") not in ("hero", "sim_meta")
+        and not unit_is_dormant(m)
     ]
 
 

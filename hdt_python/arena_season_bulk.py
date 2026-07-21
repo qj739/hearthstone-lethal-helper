@@ -42,7 +42,9 @@ _SPELL_OVERRIDES: Dict[str, _SpellSpec] = {
     "JAM_013": _SpellSpec("all_other_minions", 1, note="+3/+3友方+1伤全场其他"),
     "END_014": _SpellSpec("face_direct", 3),
     "REV_369": _SpellSpec("random_enemy_minions", 6, amount2=3, uses_random=True),
+    # 灭绝圣物：仅敌方随从，不能打英雄；伤害随圣物强化写在脚本标签
     "REV_834": _SpellSpec("random_enemy_minion_hits", 1, amount2=2, uses_random=True),
+    "CORE_REV_834": _SpellSpec("random_enemy_minion_hits", 1, amount2=2, uses_random=True),
     "TIME_001": _SpellSpec("random_split_enemies", 6, uses_random=True, note="3×2随机"),
     "TIME_441": _SpellSpec("random_split_enemies", 8, uses_random=True, note="Rewind 4×2"),
     "TIME_027": _SpellSpec("random_split_enemies", 6, uses_random=True),
@@ -96,7 +98,7 @@ _SPELL_OVERRIDES: Dict[str, _SpellSpec] = {
 # 战吼精确效果
 _BC_OVERRIDES: Dict[str, _SpellSpec] = {
     "CORE_EX1_082": _SpellSpec("random_split_characters", 3, uses_random=True),
-    "TIME_019": _SpellSpec("all_enemies", 3),
+    # TIME_019 时间流具象：需光环，见 battlecry_p0._apply_manifested_timeways
     "CORE_UNG_848": _SpellSpec("all_other_minions", 2),
     "CORE_OG_149": _SpellSpec("all_other_minions", 1),
     "END_034": _SpellSpec("destroy_enemy", note="随机随从/地标/武器v1消灭随从"),
@@ -502,12 +504,14 @@ def _make_spell_apply(spec: _SpellSpec) -> Callable:
             return res
         return _dph
     if kind == "random_enemy_minion_hits":
-        from .spell_board import _apply_random_enemy_hits
-        def _reh(t, f, *, mult, enemy_shield, rng=None, **_kw):
-            return _apply_random_enemy_hits(
+        # 灭绝圣物等：只打敌方随从，绝不打英雄
+        from .spell_board import _apply_random_minion_hits, spell_script_damage
+        def _reh(t, f, *, mult, enemy_shield, rng=None, card=None, **_kw):
+            dmg = spell_script_damage(card, default=amt) if card is not None else amt
+            return _apply_random_minion_hits(
                 t, f,
                 hits=amt2 * mult,
-                damage=amt * mult,
+                damage=max(1, int(dmg)) * mult,
                 enemy_shield=enemy_shield,
                 rng=rng,
             )
@@ -563,7 +567,8 @@ def _summon_bc_body(f, card, *, mult: int = 1) -> None:
     atk = hand_minion_attack(card) * mult
     hp = hand_minion_health(card) * mult
     cid = card.card_id or ""
-    _sb()._summon_friendly_fighter(f, atk, hp, card_id=cid)
+    aura = int(card.tags.get("AURA", 0) or 0) == 1
+    _sb()._summon_friendly_fighter(f, atk, hp, card_id=cid, aura=aura)
 
 
 def _make_combo_apply(spec: _SpellSpec, cid: str) -> Callable:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""对手牌库空时，下回合斩杀预览应计入即将承受的疲劳伤害。"""
+"""对手牌库空时，下回合斩杀预览应把疲劳单独加进场攻总和并显示。"""
 import sys
 from pathlib import Path
 
@@ -31,8 +31,8 @@ def _player(gs, eid, pid, *, fatigue=0):
     return p
 
 
-def test_opponent_turn_fatigue_lowers_lethal_threshold():
-    """对方回合：牌库空、疲劳3、英雄15血，场攻12应判下回合斩。"""
+def test_opponent_turn_fatigue_added_to_face():
+    """对方回合：牌库空、疲劳3、英雄15血；场攻12+疲3=15 应判下回合斩。"""
     gs = GameState()
     gs.local_player_id = 2
     gs.opponent_player_id = 1
@@ -44,18 +44,18 @@ def test_opponent_turn_fatigue_lowers_lethal_threshold():
     lc = LethalChecker(gs)
     assert lc._opponent_deck_count() == 0
     assert lc._opponent_upcoming_fatigue_damage() == 3
-    assert lc._lethal_threshold_hp() == 12
+    assert lc._lethal_threshold_hp() == 15
+    assert lc._lethal_search_threshold_hp() == 12
 
-    lc._overlay_face_computed = True
-    lc._overlay_incomplete = False
-    lc._overlay_total_face = 12
-    lc._overlay_mc_max = 12
-    lc._overlay_uses_random = False
+    lc._reset_overlay_board_breakdown(12, 12, 0, 12)
+    assert lc.overlay_fatigue_face() == 3
+    assert lc.cached_overlay_face() == 15
+    assert lc.overlay_display_face() == 15
     assert lc.overlay_red_prompt_ok(opp_lethal_now=False) is True
 
 
 def test_local_turn_fatigue_not_counted():
-    """我方回合：疲劳发生在回合结束后，不应降低本回合斩杀血线。"""
+    """我方回合：疲劳发生在回合结束后，不应计入总和。"""
     gs = GameState()
     gs.local_player_id = 2
     gs.opponent_player_id = 1
@@ -67,10 +67,9 @@ def test_local_turn_fatigue_not_counted():
     lc = LethalChecker(gs)
     assert lc._opponent_upcoming_fatigue_damage() == 0
     assert lc._lethal_threshold_hp() == 15
-
-    lc._overlay_face_computed = True
-    lc._overlay_incomplete = False
-    lc._overlay_total_face = 12
+    lc._reset_overlay_board_breakdown(12, 12, 0, 12)
+    assert lc.overlay_fatigue_face() == 0
+    assert lc.cached_overlay_face() == 12
     assert lc.overlay_red_prompt_ok(opp_lethal_now=False) is False
 
 
@@ -93,6 +92,9 @@ def test_opponent_turn_with_cards_in_deck_no_fatigue():
     assert lc._opponent_deck_count() == 1
     assert lc._opponent_upcoming_fatigue_damage() == 0
     assert lc._lethal_threshold_hp() == 15
+    lc._reset_overlay_board_breakdown(12, 12, 0, 12)
+    assert lc.overlay_fatigue_face() == 0
+    assert lc.cached_overlay_face() == 12
 
 
 def test_opponent_deck_count_stable_while_entities_grow():
@@ -118,7 +120,7 @@ def test_opponent_deck_count_stable_while_entities_grow():
 
 
 if __name__ == "__main__":
-    test_opponent_turn_fatigue_lowers_lethal_threshold()
+    test_opponent_turn_fatigue_added_to_face()
     test_local_turn_fatigue_not_counted()
     test_opponent_turn_with_cards_in_deck_no_fatigue()
     test_opponent_deck_count_stable_while_entities_grow()

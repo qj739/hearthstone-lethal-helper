@@ -97,9 +97,11 @@ def test_ball_hog_hits_face_when_hero_lowest():
     checker = LethalChecker(gs)
     total = checker.overlay_board_face_damage()
     _, _, _, spell, _ = checker.overlay_board_breakdown()
+    bc = checker.overlay_battlecry_face()
 
-    assert spell >= 3, f"expected >=3 face, got spell={spell} total={total}"
-    print("OK ball hog face when hero lowest", total, spell)
+    assert total >= 3, f"expected total>=3 face, got total={total}"
+    assert spell + bc >= 3, f"expected >=3 face via spell/bc, got spell={spell} bc={bc} total={total}"
+    print("OK ball hog face when hero lowest", total, spell, bc)
 
 
 def test_ball_hog_estimate_no_taunt_with_enemy_board():

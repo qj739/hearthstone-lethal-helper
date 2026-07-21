@@ -257,11 +257,24 @@ def _apply_darkbomb(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_k
 
 
 def _apply_frost_lich_cross_stitch(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw,) -> SpellApplyResult:
-    """霜巫十字绣：3 伤；若消灭则召唤 3/6（当回合失调）。"""
-    return _apply_best_minion_damage(
-        taunts, fighters, _sd(3, mult=mult, spell_power=spell_power), enemy_shield=enemy_shield,
-        summon_on_kill=(3, 6, False),
+    """霜巫十字绣：对一个角色造成 3 点伤害；若消灭随从则召唤 3/6（当回合失调）。"""
+    amount = _sd(3, mult=mult, spell_power=spell_power)
+    alive_before = {
+        t.get("entity_id")
+        for t in taunts
+        if t.get("kind") != "hero" and int(t.get("health", 0) or 0) > 0
+    }
+    res = _apply_optimal_single_target_damage(
+        taunts, fighters, amount, enemy_shield=enemy_shield,
     )
+    alive_after = {
+        t.get("entity_id")
+        for t in taunts
+        if t.get("kind") != "hero" and int(t.get("health", 0) or 0) > 0
+    }
+    if alive_before - alive_after:
+        _summon_friendly_fighter(fighters, 3, 6)
+    return res
 
 
 def _apply_runed_orb(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw,) -> SpellApplyResult:

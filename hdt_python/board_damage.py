@@ -316,8 +316,9 @@ def _std_attack(entity: "Entity", game_state: Optional["GameState"] = None) -> i
     标准攻击力（含 BUFF；衍生物 HIDE_STATS 且无攻时返回 0）。
 
     对齐 HDT BoardCard：以实体 ATK tag 为准（effective_attack_from_tags 在 ATK/479
-    不同步时取较大值）。附魔攻加成仅在「运行时攻仍停在牌面身材、尚未写入 ATK」
-    时叠加，避免 CATA_726t1 等已同步 tag 的随从被重复 +BUFF。
+    不同步时取较大值）。附魔攻加成仅在「运行时攻仍低于牌面身材」时叠加
+    （tag 尚未写入完整基础攻）。若 ATK 已达到牌面攻，视为已同步（含「变为 N」
+    后再叠光环的情形），不再 printed+附魔，避免吸血蚊等被雷欧克/巴加斯特重复加攻。
     """
     if entity.is_weapon:
         return _weapon_std_attack(entity)
@@ -327,7 +328,8 @@ def _std_attack(entity: "Entity", game_state: Optional["GameState"] = None) -> i
         if ench > 0:
             printed = _printed_minion_attack(entity.card_id or "")
             runtime = atk
-            if printed > 0 and runtime <= printed:
+            # 严格 <：ATK 已到牌面时信任 tag（斗志有限→1 再 +光环后 ATK=3 等）
+            if printed > 0 and runtime < printed:
                 atk = max(runtime, printed + ench)
     if atk <= 0 and entity.atk > 0 and entity.atk != INFINITE_ATK:
         atk = entity.atk
@@ -382,7 +384,7 @@ def entity_spell_immune(
     if gs is None or not getattr(entity, "entity_id", None):
         return False
     eid = int(entity.entity_id)
-    for e in gs.entities.values():
+    for e in list(gs.entities.values()):
         if entity_cardtype(e) != "ENCHANTMENT":
             continue
         if int(e.tags.get("ATTACHED", 0) or 0) != eid:
@@ -416,10 +418,12 @@ def is_exhausted(entity: "Entity") -> bool:
         return True
 
     # 日志常在回合开始后仍保留 EXHAUSTED=1，但 NUM_ATTACKS_THIS_TURN 已归零
+    # 休眠刚苏醒也常带 EXHAUSTED=1 + NUM_TURNS>=1，不可当作“陈旧疲劳”清掉
     if (
         _tag(entity, "EXHAUSTED")
         and _num_turns_in_play(entity) >= 1
         and used == 0
+        and not _tag(entity, "DORMANT_AWAKENED_THIS_TURN")
     ):
         return False
 
@@ -723,6 +727,9 @@ def _minion_summoned_this_turn(entity: "Entity") -> bool:
     if _tag(entity, "SUMMONING_SICKNESS") or _tag(entity, "1196"):
         return True
     if _tag(entity, "JUST_PLAYED"):
+        return True
+    # 休眠刚苏醒：本回合仍有召唤失调，不可攻击（玛瑟里顿等）
+    if _tag(entity, "DORMANT_AWAKENED_THIS_TURN"):
         return True
     return _num_turns_in_play(entity) == 0
 
@@ -1064,36 +1071,100 @@ class BoardHeroView:
         return self.hero.entity
 
 
-def hero_weapon_strike_damage(
-    hero_entity: "Entity", weapon_entity: Optional["Entity"],
+# 团队之灵：你的回合英雄 +2 攻（场上光环；日志有时英雄 ATK 未含此加成）
+TEAM_SPIRIT_CARD_IDS = frozenset({"TOY_028"})
+TEAM_SPIRIT_ATK_BONUS = 2
+
+
+def count_board_team_spirit(
+    game_state: Optional["GameState"], player_id: Optional[int],
 ) -> int:
-    """英雄单次打脸伤害：有武器时用武器攻（埃提耶识等可能未同步英雄479）。"""
-    if weapon_entity is not None and _std_attack(weapon_entity) > 0:
-        return _std_attack(weapon_entity)
-    return _std_attack(hero_entity)
+    """场上存活、未沉默的团队之灵数量。"""
+    if game_state is None or player_id is None:
+        return 0
+    n = 0
+    for m in game_state.get_board(player_id):
+        cid = m.card_id or ""
+        if cid not in TEAM_SPIRIT_CARD_IDS and not cid.endswith("TOY_028"):
+            continue
+        if int(getattr(m, "current_health", 0) or 0) <= 0:
+            continue
+        if is_silenced(m):
+            continue
+        if is_dormant(m, game_state):
+            continue
+        n += 1
+    return n
+
+
+def hero_weapon_strike_damage(
+    hero_entity: "Entity",
+    weapon_entity: Optional["Entity"],
+    *,
+    team_spirit_count: int = 0,
+) -> int:
+    """英雄单次打脸伤害。
+
+    有武器时以武器攻为底；若英雄 ATK 更高（团队之灵光环、恶魔之爪等已写入
+    英雄 ATK），取较大值。埃提耶识等英雄 479 未同步时仍能靠武器攻兜底。
+
+    team_spirit_count：场上团队之灵数。若英雄 ATK 相对武器的超额攻击
+    尚未覆盖光环 +2×N，则补足缺失部分，避免漏算。
+    """
+    hero_atk = _std_attack(hero_entity)
+    w_atk = (
+        _std_attack(weapon_entity)
+        if weapon_entity is not None and _std_attack(weapon_entity) > 0
+        else 0
+    )
+    base = max(w_atk, hero_atk) if w_atk > 0 else hero_atk
+    n = max(0, int(team_spirit_count or 0))
+    if n <= 0:
+        return base
+    want = TEAM_SPIRIT_ATK_BONUS * n
+    have_extra = max(0, hero_atk - w_atk)
+    missing = max(0, want - have_extra)
+    return base + missing
 
 
 def hero_can_attack_with_weapon(
     hero_entity: "Entity",
     weapon_entity: Optional["Entity"],
     active_turn: bool,
+    *,
+    team_spirit_count: int = 0,
 ) -> bool:
     """英雄本回合是否还能持武攻击。"""
     if not _is_able_to_attack(hero_entity, active_turn, False, True):
         return False
     if weapon_entity is None:
-        return _std_attack(hero_entity) > 0
+        return hero_weapon_strike_damage(
+            hero_entity, None, team_spirit_count=team_spirit_count,
+        ) > 0
     if weapon_entity.current_durability <= 0:
         return False
-    return _std_attack(weapon_entity) > 0
+    return _std_attack(weapon_entity) > 0 or hero_weapon_strike_damage(
+        hero_entity, weapon_entity, team_spirit_count=team_spirit_count,
+    ) > 0
 
 
-def _attack_with_weapon(hero_entity: "Entity", weapon_entity: Optional["Entity"], active_turn: bool) -> int:
-    if not hero_can_attack_with_weapon(hero_entity, weapon_entity, active_turn):
+def _attack_with_weapon(
+    hero_entity: "Entity",
+    weapon_entity: Optional["Entity"],
+    active_turn: bool,
+    *,
+    team_spirit_count: int = 0,
+) -> int:
+    if not hero_can_attack_with_weapon(
+        hero_entity, weapon_entity, active_turn,
+        team_spirit_count=team_spirit_count,
+    ):
         return 0
     if not hero_weapon_can_face(hero_entity, weapon_entity):
         return 0
-    base = hero_weapon_strike_damage(hero_entity, weapon_entity)
+    base = hero_weapon_strike_damage(
+        hero_entity, weapon_entity, team_spirit_count=team_spirit_count,
+    )
     used = attacks_this_turn(hero_entity) if active_turn else 0
     if weapon_entity is None:
         silenced = is_silenced(hero_entity)
@@ -1111,11 +1182,24 @@ def _attack_with_weapon(hero_entity: "Entity", weapon_entity: Optional["Entity"]
     return base
 
 
-def build_board_hero(hero: "Entity", weapon: Optional["Entity"], active_turn: bool) -> BoardHeroView:
+def build_board_hero(
+    hero: "Entity",
+    weapon: Optional["Entity"],
+    active_turn: bool,
+    *,
+    team_spirit_count: int = 0,
+) -> BoardHeroView:
     hero_view = build_board_card(hero, active_turn)
     weapon_view = build_board_card(weapon, active_turn) if weapon else None
-    include = hero_can_attack_with_weapon(hero, weapon, active_turn)
-    attack = _attack_with_weapon(hero, weapon, active_turn) if include else 0
+    include = hero_can_attack_with_weapon(
+        hero, weapon, active_turn, team_spirit_count=team_spirit_count,
+    )
+    attack = (
+        _attack_with_weapon(
+            hero, weapon, active_turn, team_spirit_count=team_spirit_count,
+        )
+        if include else 0
+    )
     return BoardHeroView(
         hero=hero_view,
         weapon=weapon_view,
@@ -1190,9 +1274,12 @@ class PlayerBoardView:
         if self.hero and self.hero.include:
             hero_entity = self.hero.entity
             weapon_entity = self.hero.weapon.entity if self.hero.weapon else None
+            spirit_n = count_board_team_spirit(self.game_state, self.player_id)
             if hero_weapon_can_face(hero_entity, weapon_entity):
                 if weapon_entity and _std_attack(weapon_entity) > 0:
-                    w_atk = _std_attack(weapon_entity)
+                    w_atk = hero_weapon_strike_damage(
+                        hero_entity, weapon_entity, team_spirit_count=spirit_n,
+                    )
                     if w_atk != INFINITE_ATK:
                         silenced = is_silenced(hero_entity)
                         per_turn = attacks_per_turn(hero_entity, silenced)
@@ -1298,7 +1385,10 @@ def build_player_board(
     hero_view: Optional[BoardHeroView] = None
 
     if hero_entity:
-        hero_view = build_board_hero(hero_entity, weapon_entity, active_turn)
+        spirit_n = count_board_team_spirit(game_state, player_id)
+        hero_view = build_board_hero(
+            hero_entity, weapon_entity, active_turn, team_spirit_count=spirit_n,
+        )
         cards.append(hero_view.hero)
 
     for e in game_state.get_board(player_id):

@@ -402,16 +402,31 @@ class LethalChecker:
 
     def _lethal_threshold_hp(self, *, subtract_overlay_lifesteal: bool = False) -> int:
         """
-        斩杀判定用对手有效血量。
+        斩杀判定用对手有效血量（不含疲劳）。
+        疲劳在场攻求和里单独加成（见 overlay_fatigue_face / _reset_overlay_board_breakdown）。
         subtract_overlay_lifesteal：本 combo 内法术/清场触发的吸血已在同一模拟里结算，
         不应再抬高有效血线（否则月亮井等 AOE 会双重计入吸血）。
-        对方回合预览下回合斩时，另减去对手即将承受的抽牌疲劳（牌库已空）。
         """
         threshold = self.get_opponent_effective_hp()
         if subtract_overlay_lifesteal:
             threshold -= int(getattr(self, "_overlay_lifesteal_heal", 0) or 0)
-        threshold -= self._opponent_upcoming_fatigue_damage()
         return max(0, threshold)
+
+    def _lethal_search_threshold_hp(self, *, subtract_overlay_lifesteal: bool = False) -> int:
+        """
+        连招搜索/MC 用阈值：此时场攻尚未加疲劳动，用「有效血−疲劳」与无疲劳场攻比较。
+        """
+        return max(
+            0,
+            self._lethal_threshold_hp(
+                subtract_overlay_lifesteal=subtract_overlay_lifesteal,
+            )
+            - self._opponent_upcoming_fatigue_damage(),
+        )
+
+    def overlay_fatigue_face(self) -> int:
+        """对手回合牌库空时计入总和的疲劳伤害（分项「疲」）。"""
+        return getattr(self, "_overlay_fatigue_face", 0)
 
     def _apply_overlay_board_lethal(
         self, total_damage: int, sources: List[DamageSource]
@@ -432,12 +447,15 @@ class LethalChecker:
         lethal_hp = self._lethal_threshold_hp(subtract_overlay_lifesteal=True)
         boosted_total = max(total_damage, display)
         if uses_random:
-            has_lethal = face >= lethal_hp or (
-                mc_max >= lethal_hp and lethal_prob >= MIN_LETHAL_PROMPT_PROB
+            # 与 overlay_red_prompt_ok 一致：不用乐观上限当面确定斩
+            has_lethal = (
+                mc_max >= lethal_hp
+                and lethal_prob >= MIN_LETHAL_PROMPT_PROB
             )
         else:
             has_lethal = face >= lethal_hp
-        # 对手仍有嘲讽且纯场面（无模拟清嘲）不足以斩杀 → 抑制误报
+        # 对手仍有嘲讽且纯场面（无模拟清嘲）不足以斩杀 → 抑制误报。
+        # 法术/英雄技能等可指定打脸的直伤可穿嘲讽，须一并计入。
         if has_lethal and not uses_random:
             opp = self.game_state.opponent_player_id
             if opp is not None:
@@ -449,10 +467,16 @@ class LethalChecker:
                     board_from_spells = max(0, minion_bd) + max(
                         0, getattr(self, "_overlay_weapon_face", 0),
                     )
+                    pierce_face = (
+                        max(0, spell_bd)
+                        + max(0, getattr(self, "_overlay_hero_power_face", 0))
+                        + max(0, getattr(self, "_overlay_hero_buff_face", 0))
+                        + max(0, getattr(self, "_overlay_battlecry_face", 0))
+                    )
                     if (
                         board_from_spells <= 0
                         and pure < lethal_hp
-                        and spell_bd < lethal_hp
+                        and pierce_face < lethal_hp
                     ):
                         has_lethal = False
         if has_lethal and not any(s.source_type == "board" for s in sources):
@@ -748,7 +772,7 @@ class LethalChecker:
                 enemy_states = self._build_enemy_minion_states(local)
                 our_board = self.game_state.get_board(local)
                 if end_turn_uses_random(our_board):
-                    eff = self._lethal_threshold_hp()
+                    eff = self._lethal_search_threshold_hp()
                     mc_max, prob, top_outcomes, board_part = (
                         self._monte_carlo_pure_board_end_turn(
                             pure_immediate, enemy_states, opp_shield, eff,
@@ -787,7 +811,7 @@ class LethalChecker:
                 board_view, local, opp_taunts, opp_shield, hand_spells, mana,
                 pure_immediate=pure_immediate,
                 pure_et=pure_et,
-                effective_hp=self._lethal_threshold_hp(),
+                effective_hp=self._lethal_search_threshold_hp(),
                 hand_charges=hand_charges,
             )
             if self._lethal_budget_expired():
@@ -869,6 +893,7 @@ class LethalChecker:
         "_overlay_battlecry_face",
         "_overlay_hero_power_face",
         "_overlay_hero_buff_face",
+        "_overlay_fatigue_face",
         "_overlay_lifesteal_heal",
         "_overlay_deathrattle_armor",
         "_overlay_total_face",
@@ -950,6 +975,7 @@ class LethalChecker:
         self._overlay_battlecry_face = 0
         self._overlay_hero_power_face = 0
         self._overlay_hero_buff_face = 0
+        self._overlay_fatigue_face = 0
         self._overlay_lifesteal_heal = 0
         self._overlay_deathrattle_armor = 0
         self._overlay_total_face = 0
@@ -1007,6 +1033,7 @@ class LethalChecker:
             + getattr(self, "_overlay_hero_power_face", 0)
             + getattr(self, "_overlay_hero_buff_face", 0)
             + getattr(self, "_overlay_battlecry_face", 0)
+            + getattr(self, "_overlay_fatigue_face", 0)
         )
 
     def overlay_dormant_end_turn_face(self) -> int:
@@ -1050,6 +1077,16 @@ class LethalChecker:
         uses_random: bool = False,
         top_outcomes: Optional[List[Tuple[int, float]]] = None,
     ) -> None:
+        fatigue = self._opponent_upcoming_fatigue_damage()
+        self._overlay_fatigue_face = fatigue
+        if fatigue > 0:
+            total = int(total) + fatigue
+            if mc_max is not None:
+                mc_max = int(mc_max) + fatigue
+            if top_outcomes:
+                top_outcomes = [
+                    (int(dmg) + fatigue, prob) for dmg, prob in top_outcomes
+                ]
         self._overlay_pure_board_face = pure
         self._overlay_board_face = minion_board
         self._overlay_weapon_face = weapon_board
@@ -1496,7 +1533,7 @@ class LethalChecker:
                 total, minion_board, weapon_board, spell_face, hp_board, hero_buff_board,
             )
         extra = sim_end_turn_entities_from_fighters(fighters)
-        eff_hp = self._lethal_threshold_hp()
+        eff_hp = self._lethal_search_threshold_hp()
         hero_hp_after = max(0, eff_hp - max(0, int(total)))
         et_face, _ = end_turn_face_damage(
             our_board, enemy, defender_shield,
@@ -2593,8 +2630,11 @@ class LethalChecker:
         if threshold <= 0:
             return False
         if uses_random:
-            return face >= threshold or (
-                mc_max >= threshold and lethal_prob >= MIN_LETHAL_PROMPT_PROB
+            # 随机线：total_face 常为乐观上限，不可单独当确定斩杀
+            # （夕阳漫射等：max=刚好斩、但 P≈0 时会误红）
+            return (
+                mc_max >= threshold
+                and lethal_prob >= MIN_LETHAL_PROMPT_PROB
             )
         return face >= threshold
 
@@ -3072,7 +3112,11 @@ class LethalChecker:
             display_hero_power_face = floor_hp
             display_score = float(floor_total)
             if not display_note and self.is_opponent_turn():
-                names = end_turn_names_on_board(self.game_state.get_board(player_id))
+                names = end_turn_names_on_board(
+                    self.game_state.get_board(player_id),
+                    game_state=self.game_state,
+                    player_id=player_id,
+                )
                 if names:
                     display_note = f"下回合+{'+'.join(names)}"
 
@@ -3821,7 +3865,11 @@ class LethalChecker:
             player_id=attacker_id,
         )
         if et_face > 0:
-            names = end_turn_names_on_board(self.game_state.get_board(attacker_id))
+            names = end_turn_names_on_board(
+                self.game_state.get_board(attacker_id),
+                game_state=self.game_state,
+                player_id=attacker_id,
+            )
             label = names[0] if len(names) == 1 else "回合结束"
             damage_sources.append(
                 DamageSource("board", et_face, f"回合结束:{label}+{et_face}"),
@@ -3873,6 +3921,13 @@ class LethalChecker:
                     )
                     total_damage += charge_damage
                 available_mana -= actual_cost
+
+        fatigue = self._opponent_upcoming_fatigue_damage()
+        if fatigue > 0:
+            damage_sources.append(
+                DamageSource("fatigue", fatigue, "疲劳"),
+            )
+            total_damage += fatigue
 
         # 判断是否有斩杀（吸血嘲讽、亡语加甲抬高有效血量；英雄圣盾在场面伤害里已计）
         opp_effective_hp = self._lethal_threshold_hp()
@@ -3987,13 +4042,20 @@ class LethalChecker:
         hero = self.game_state.get_hero(player_id)
         weapon = self.game_state.get_weapon(player_id)
         active = board_view.active_turn
-        if hero and weapon and hero_can_attack_with_weapon(hero, weapon, active):
+        from .board_damage import count_board_team_spirit
+
+        spirit_n = count_board_team_spirit(self.game_state, player_id)
+        if hero and weapon and hero_can_attack_with_weapon(
+            hero, weapon, active, team_spirit_count=spirit_n,
+        ):
             silenced = is_silenced(hero)
             max_a = attacks_per_turn(hero, silenced)
             used = attacks_this_turn(hero) if active else 0
             hero_attacks = max(max_a - used, 0)
             hero_attacks = min(hero_attacks, weapon.current_durability)
-            w_atk = _std_attack(weapon)
+            w_atk = hero_weapon_strike_damage(
+                hero, weapon, team_spirit_count=spirit_n,
+            )
             if hero_attacks > 0 and w_atk > 0:
                 w_fighter = {
                     "kind": "weapon",
@@ -4008,12 +4070,16 @@ class LethalChecker:
                 from .weapon_p0 import stamp_equipped_weapon_effects
                 stamp_equipped_weapon_effects(w_fighter, weapon.card_id or "")
                 fighters.append(w_fighter)
-        elif hero and hero_can_attack_with_weapon(hero, None, active):
+        elif hero and hero_can_attack_with_weapon(
+            hero, None, active, team_spirit_count=spirit_n,
+        ):
             silenced = is_silenced(hero)
             max_a = attacks_per_turn(hero, silenced)
             used = attacks_this_turn(hero) if active else 0
             hero_attacks = max(max_a - used, 0)
-            h_atk = hero_weapon_strike_damage(hero, None)
+            h_atk = hero_weapon_strike_damage(
+                hero, None, team_spirit_count=spirit_n,
+            )
             if hero_attacks > 0 and h_atk > 0:
                 fighters.append({
                     "kind": "hero",

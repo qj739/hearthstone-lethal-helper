@@ -244,6 +244,74 @@ def _apply_spikeridged_steed(
     return SpellApplyResult()
 
 
+def _apply_detectives_clothes(
+    taunts,
+    fighters,
+    *,
+    mult,
+    enemy_shield,
+    spell_power=0,
+    gs=None,
+    player_id=None,
+    **_kw,
+) -> SpellApplyResult:
+    """侦探服 JAIL_447t：使一个友方随从获得 +4/+4 和突袭。"""
+    picked = _pick_best_spell_target_fighter(fighters, gs=gs, player_id=player_id)
+    if picked is None:
+        return SpellApplyResult()
+    _apply_buff_to_spell_target(
+        fighters,
+        picked,
+        bonus_atk=_sd(4, mult=mult, spell_power=spell_power),
+        bonus_health=_sd(4, mult=mult, spell_power=spell_power),
+        grant_rush=True,
+    )
+    return SpellApplyResult()
+
+
+def _apply_sunscreen(
+    taunts,
+    fighters,
+    *,
+    mult,
+    enemy_shield,
+    spell_power=0,
+    gs=None,
+    player_id=None,
+    **_kw,
+) -> SpellApplyResult:
+    """防晒霜 VAC_917t：使一个友方随从获得 +1/+2（斩杀择优打脸目标）。"""
+    picked = _pick_best_spell_target_fighter(fighters, gs=gs, player_id=player_id)
+    if picked is None:
+        return SpellApplyResult()
+    _apply_buff_to_spell_target(
+        fighters,
+        picked,
+        bonus_atk=_sd(1, mult=mult, spell_power=spell_power),
+        bonus_health=_sd(2, mult=mult, spell_power=spell_power),
+    )
+    return SpellApplyResult()
+
+
+def _apply_anti_magic_shell(
+    taunts,
+    fighters,
+    *,
+    mult,
+    enemy_shield,
+    spell_power=0,
+    card=None,
+    **_kw,
+) -> SpellApplyResult:
+    """反魔法护罩：全体友方随从 +N/+N（扰魔对斩杀打脸无影响，v1 不模拟）。"""
+    cid = (card.card_id if card and card.card_id else "") or ""
+    # ICC 巫妖王衍生 +2/+2；骑士版 / 序章 +1/+1
+    bonus = 2 if "ICC_314t7" in cid else 1
+    amt = _sd(bonus, mult=mult, spell_power=spell_power)
+    _buff_all_friendly_minions(fighters, bonus_atk=amt, bonus_health=amt)
+    return SpellApplyResult()
+
+
 def _apply_banana_bunch(
     taunts,
     fighters,
@@ -288,6 +356,10 @@ def _register_p0_buff() -> None:
         (("WW_027",), 2, "可靠陪伴", _apply_reliable_companion, False),
         (("MAW_021", "CORE_MAW_021"), 3, "问心无愧", _apply_reliable_companion, False),
         (("CORE_UNG_952", "UNG_952"), 5, "剑龙骑术", _apply_spikeridged_steed, False),
+        (("JAIL_447t",), 4, "侦探服", _apply_detectives_clothes, False),
+        (("VAC_917t",), 1, "防晒霜", _apply_sunscreen, False),
+        (("RLK_048", "RLK_Prologue_RLK_048"), 3, "反魔法护罩", _apply_anti_magic_shell, False),
+        (("ICC_314t7",), 4, "反魔法护罩", _apply_anti_magic_shell, False),
         (("TOY_716",), 4, "光速抢购", _apply_flash_sale, False),
         (("ETC_717", "ETC_717t"), 2, "悦耳嘻哈", _apply_hip_hop, False),
         (("ETC_201", "ETC_201t", "ETC_201t2"), 1, "一串香蕉", _apply_banana_bunch, False),

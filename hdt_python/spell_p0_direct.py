@@ -128,13 +128,16 @@ def _apply_arcane_arrow(
 
 
 def _frozen_touch_infused(card) -> bool:
-    """注能完成（REV_601t 或 REV_601 亮边）。"""
+    """注能完成（REV_601t / INFUSED / POWERED_UP 亮边）。"""
     if card is None:
         return False
     cid = getattr(card, "card_id", None) or ""
-    if cid == "REV_601t":
+    if cid in ("REV_601t", "CORE_REV_601t"):
         return True
-    if cid == "REV_601" and card.tags.get("POWERED_UP") == 1:
+    tags = getattr(card, "tags", None) or {}
+    if int(tags.get("INFUSED", 0) or 0) == 1:
+        return True
+    if cid in ("REV_601", "CORE_REV_601") and int(tags.get("POWERED_UP", 0) or 0) == 1:
         return True
     return False
 
@@ -507,7 +510,7 @@ def _register_p0_direct() -> None:
         (("AV_212",), 2, "法力虹吸", _apply_siphon_mana, False),
         (("RLK_843",), 1, "奥术箭", _apply_arcane_arrow, False),
         (("VAC_427",), 2, "甜筒殡淇淋", _apply_corpsicle, False),
-        (("REV_601", "REV_601t"), 2, "冰冻之触", _apply_frozen_touch, False),
+        (("REV_601", "REV_601t", "CORE_REV_601"), 2, "冰冻之触", _apply_frozen_touch, False),
         (("CATA_464t",), 2, "龙息", _apply_dragon_breath, False),
         (("ETC_210",), 10, "通灵最强音", _apply_climactic_necrotic_explosion, False),
     ]

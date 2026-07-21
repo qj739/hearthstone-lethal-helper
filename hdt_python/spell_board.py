@@ -651,9 +651,14 @@ def _living_enemy_units(
     spell_targetable_only: bool = False,
     hero_hp: Optional[int] = None,
 ) -> List[dict]:
+    from .combat_sim import unit_is_dormant
+
     units: List[dict] = []
     for t in taunts:
         if t.get("health", 0) <= 0:
+            continue
+        # 休眠/不可碰：球霸等「最低血敌人」与实战一致，跳过
+        if unit_is_dormant(t):
             continue
         if spell_targetable_only and t.get("spell_immune"):
             continue
@@ -776,12 +781,18 @@ def _apply_random_enemy_hits(
     exclude_keys: Optional[set] = None,
 ) -> SpellApplyResult:
     """distinct_targets=True 时各次伤害不能重复命中同一单位；exclude_keys 预先排除（如奥术弹幕主目标）。"""
+    from .combat_sim import unit_is_dormant
+
     res = SpellApplyResult()
     roll = _rng_or_default(rng)
     used: set = set(exclude_keys or ())
     hero = None if exclude_hero else _hero_unit(enemy_shield)
     for _ in range(hits):
-        units = [t for t in taunts if t.get("health", 0) > 0]
+        # 休眠随从不可被随机点名（灭绝圣物等）
+        units = [
+            t for t in taunts
+            if t.get("health", 0) > 0 and not unit_is_dormant(t)
+        ]
         if hero is not None:
             units.append(hero)
         units = [u for u in units if _target_key(u) not in used]
@@ -941,6 +952,7 @@ def _summon_friendly_fighter(
     windfury: bool = False,
     card_id: str = "",
     from_hero_power: bool = False,
+    aura: bool = False,
 ) -> None:
     """
     法术当回合召唤随从。
@@ -968,6 +980,7 @@ def _summon_friendly_fighter(
         "charge": charge,
         "windfury": windfury,
         "from_hero_power": from_hero_power,
+        "aura": aura,
     }
     fighters.append(unit)
     apply_leokk_aura_on_minion_added(fighters, unit)
@@ -1100,20 +1113,36 @@ def _pick_best_spell_target_fighter(
     )
 
 
+def _grant_rush_on_fighter(unit: dict) -> None:
+    """法术/战吼赋予突袭：可获得 1 次攻击；新建突袭不能打脸，原本可打脸则保留。"""
+    had_face = bool(unit.get("can_face"))
+    had_attacks = int(unit.get("attacks_left", 0) or 0) > 0
+    unit["rush"] = True
+    if not unit.get("charge") and int(unit.get("attacks_left", 0) or 0) <= 0:
+        unit["attacks_left"] = 1
+    if had_face and had_attacks:
+        unit["can_face"] = True
+    else:
+        unit["can_face"] = bool(unit.get("charge"))
+
+
 def _apply_buff_to_spell_target(
     fighters: List[dict],
     picked: Tuple[str, object, dict],
     *,
     bonus_atk: int,
     bonus_health: int,
+    grant_rush: bool = False,
 ) -> None:
-    """对单个可指定友方随从施加攻/血增益。"""
+    """对单个可指定友方随从施加攻/血增益（可选赋予突袭）。"""
     src, key, unit = picked
     if src == "fighter":
         i = int(key)
         fighters[i] = dict(fighters[i])
         fighters[i]["atk"] = fighters[i].get("atk", 0) + bonus_atk
         fighters[i]["health"] = fighters[i].get("health", 0) + bonus_health
+        if grant_rush:
+            _grant_rush_on_fighter(fighters[i])
         return
     eid = key
     for i, f in enumerate(fighters):
@@ -1121,13 +1150,20 @@ def _apply_buff_to_spell_target(
             fighters[i] = dict(f)
             fighters[i]["atk"] = fighters[i].get("atk", 0) + bonus_atk
             fighters[i]["health"] = fighters[i].get("health", 0) + bonus_health
+            if grant_rush:
+                _grant_rush_on_fighter(fighters[i])
             return
-    # 未在 fighters 中：仅记录 buff 后的身材，不授予本回合攻击权
+    # 未在 fighters 中：仅记录 buff 后的身材；突袭可解场但不能打脸
     buffed = dict(unit)
     buffed["atk"] = buffed.get("atk", 0) + bonus_atk
     buffed["health"] = buffed.get("health", 0) + bonus_health
-    buffed["attacks_left"] = 0
-    buffed["can_face"] = False
+    if grant_rush:
+        buffed["attacks_left"] = 1
+        buffed["can_face"] = False
+        buffed["rush"] = True
+    else:
+        buffed["attacks_left"] = 0
+        buffed["can_face"] = False
     fighters.append(buffed)
 
 
@@ -2422,15 +2458,23 @@ def spell_sequence_mana_left(
     sequence: List["SpellPlayStep"],
     mana_budget: Optional[int],
 ) -> Optional[int]:
-    """估算法术序列实际消耗后的剩余法力（饮品连喝每杯另付费用）。"""
+    """估算法术序列实际消耗后的剩余法力（饮品连喝 / 冰冻之触回手另付费用）。"""
     if mana_budget is None:
         return None
     mana_left = mana_budget
+    from .spell_p0_direct import _frozen_touch_infused
+
     for defn, cost, card in sequence:
         cid = _spell_card_id(card) or (defn.card_ids[0] if defn.card_ids else "")
         step_spent, mana_left = _mana_for_drink_step(cid, cost, mana_left)
         if step_spent <= 0 and cost > 0:
             continue
+        # 注能冰冻之触：打出后回手未注能之触，同回合可再付费打一次
+        if _frozen_touch_infused(card):
+            bounce = get_board_spell_def("REV_601")
+            bounce_cost = bounce.base_cost if bounce else 2
+            if mana_left >= bounce_cost:
+                mana_left -= bounce_cost
     return mana_left
 
 # 初始之火 → 传承之火（HJSON：衍生牌 id 为 SW_108t，Core/原版均共用）

@@ -85,7 +85,10 @@ class HearthstoneTracker:
             "TAG_SCRIPT_DATA_NUM_1", "CARDTYPE", "FROZEN", "CANT_ATTACK",
             "WINDFURY", "MEGA_WINDFURY", "MAX_NUM_ATTACKS", "CHARGE", "RUSH",
             "ATTACKABLE_BY_RUSH", "ARMOR", "MAIN_HAND_WEAPON_ENTITY", "TURN", "CURRENT_PLAYER",
-            "FIRST_PLAYER", "DORMANT", "DORMANT_AWAKEN_CONDITION_ENCHANT", "UNTOUCHABLE",
+            "FIRST_PLAYER", "DORMANT", "DORMANT_AWAKEN_CONDITION_ENCHANT",
+            "DORMANT_AWAKENED_THIS_TURN", "UNTOUCHABLE",
+            "SCORE_VALUE_1", "SCORE_VALUE_2", "ATTACHED",
+            "AURA", "INFUSED",
             "TITAN", "SILENCED", "HIDE_STATS", "TAUNT",
             "LOCATION_ACTION_COOLDOWN", "POWERED_UP", "COMBO_ACTIVE",
         }
@@ -485,9 +488,13 @@ class HearthstoneTracker:
             dormant_et = self.lethal_checker.overlay_end_turn_face_for_display()
             if dormant_et > 0:
                 extras.append(f"回{dormant_et}")
+            fatigue_face = self.lethal_checker.overlay_fatigue_face()
+            if fatigue_face > 0:
+                extras.append(f"疲{fatigue_face}")
         else:
             battlecry_face = self.lethal_checker.overlay_battlecry_face()
             dormant_et = 0
+            fatigue_face = self.lethal_checker.overlay_fatigue_face()
 
         if uses_random and top_outcomes:
             parts = [f"{dmg}({prob * 100:.0f}%)" for dmg, prob in top_outcomes]
@@ -714,6 +721,9 @@ class HearthstoneTracker:
         dormant_et = self.lethal_checker.overlay_end_turn_face_for_display()
         if dormant_et > 0:
             breakdown_parts.append(f"回{dormant_et}")
+        fatigue_face = self.lethal_checker.overlay_fatigue_face()
+        if fatigue_face > 0:
+            breakdown_parts.append(f"疲{fatigue_face}")
         if breakdown_parts:
             print(f"  分项: {'+'.join(breakdown_parts)}", end="")
         spell_detail_parts = []

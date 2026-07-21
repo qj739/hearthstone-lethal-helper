@@ -96,9 +96,31 @@ def test_overlay_red_blocked_when_opp_lethal_now():
     assert lc.overlay_red_prompt_ok(opp_lethal_now=True) is False
 
 
+def test_random_optimistic_max_not_red_when_prob_near_zero():
+    """夕阳漫射类：MC 上限刚好斩杀但概率≈0 时不应红字（实际常差1）。"""
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.active_player_id = 1
+    lc = LethalChecker(gs)
+    lc._overlay_face_computed = True
+    lc._overlay_incomplete = False
+    lc._overlay_total_face = 20  # 乐观上限
+    lc._overlay_mc_max = 20
+    lc._overlay_lethal_prob = 0.04
+    lc._overlay_uses_random = True
+    lc._overlay_top_outcomes = [(20, 0.04), (19, 0.96)]
+    lc.get_opponent_effective_hp = lambda: 20
+
+    assert lc.overlay_red_prompt_ok(opp_lethal_now=False) is False
+    has, _ = lc._apply_overlay_board_lethal(0, [])
+    assert has is False
+
+
 if __name__ == "__main__":
     test_overlay_diff_damage_not_inflated_when_not_lethal()
     test_overlay_lethal_diff_note_for_low_random_prob()
     test_overlay_red_prompt_ok_on_opponent_turn()
     test_overlay_red_blocked_when_opp_lethal_now()
+    test_random_optimistic_max_not_red_when_prob_near_zero()
     print("OK overlay diff display (unit)")

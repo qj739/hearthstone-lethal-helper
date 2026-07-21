@@ -565,6 +565,9 @@ def _register_p0_minion() -> None:
         (("TLC_901",), 2, "烟雾熏蒸", _apply_fumigate, False, None),
         (("CATA_978",), 5, "辛达苟萨的胜利", _minion_damage_fn(8), False, None),
         (("SCH_512",), 6, "通窍", _apply_initiation, False, None),
+        # 逃离紫罗兰堡 / DK：点解嘲讽，避免硬核信徒等战吼被挪去清嘲
+        (("JAIL_441",), 2, "饮血术", _minion_damage_fn(3, self_lifesteal=True), False, None),
+        (("RLK_024",), 4, "灵界打击", _minion_damage_fn(6, self_lifesteal=True), False, None),
     ]
     for card_ids, cost, name, fn, uses_random, cost_fn in specs:
         _register(

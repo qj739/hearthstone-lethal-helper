@@ -175,7 +175,7 @@ class OverlaySettingsWindow:
         notebook.add(tab, text="窗口")
         tab.columnconfigure(0, weight=1)
 
-        self._bool(tab, "attach_to_game", "嵌入炉石窗口（录屏友好）", 0)
+        self._bool(tab, "attach_to_game", "嵌入炉石窗口（全屏常看不见，录屏才建议开）", 0)
         self._bool(tab, "use_layered", "半透明 Layered 窗口", 1)
         ttk.Label(
             tab,

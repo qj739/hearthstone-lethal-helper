@@ -12,7 +12,7 @@ from hdt_python.app_paths import user_data_dir
 
 DEFAULT_SETTINGS_PATH = user_data_dir() / "overlay_settings.json"
 
-SETTINGS_VERSION = 1
+SETTINGS_VERSION = 2
 
 
 @dataclass
@@ -40,8 +40,8 @@ class OverlaySettings:
     show_lethal_diff: bool = True
     compact_mode: bool = False
 
-    # 窗口
-    attach_to_game: bool = True
+    # 窗口（默认独立置顶：炉石全屏 DirectX 下子窗口几乎不可见）
+    attach_to_game: bool = False
     use_layered: bool = False
     offset_x: int = 100
     offset_y: int = 20
@@ -73,6 +73,10 @@ class OverlaySettings:
             return cls()
         known = {f.name for f in fields(cls)}
         kwargs = {k: data[k] for k in known if k in data}
+        # v1→v2：旧默认「嵌入炉石」在全屏下不可见，统一改为独立置顶
+        raw_ver = int(data.get("version") or 1)
+        if raw_ver < 2:
+            kwargs["attach_to_game"] = False
         return cls(**kwargs).normalized()
 
     def merge_cli(self, *, layered: Optional[bool] = None, float_overlay: Optional[bool] = None) -> "OverlaySettings":
@@ -101,7 +105,11 @@ class OverlaySettingsStore:
             return self._settings
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
+            prev_ver = int((raw or {}).get("version") or 1)
             self._settings = OverlaySettings.from_dict(raw)
+            # 迁移后写回，避免下次仍读到旧 embed 配置
+            if prev_ver < SETTINGS_VERSION:
+                self.save()
         except (OSError, json.JSONDecodeError, TypeError, ValueError):
             self._settings = OverlaySettings()
         return self._settings

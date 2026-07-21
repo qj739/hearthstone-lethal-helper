@@ -1350,15 +1350,16 @@ class Overlay:
         self.hwnd = None
 
     def _find_hs_window(self):
-        hs_hwnd = user32.FindWindowW("UnityWndClass", None)
-        if hs_hwnd:
-            return hs_hwnd
+        # 优先按标题匹配，避免误挂到其它 Unity 游戏窗口
         for title in (self.title_hint, "炉石传说", "Hearthstone"):
             if not title:
                 continue
             hs_hwnd = user32.FindWindowW(None, title)
             if hs_hwnd:
                 return hs_hwnd
+        hs_hwnd = user32.FindWindowW("UnityWndClass", None)
+        if hs_hwnd:
+            return hs_hwnd
         return None
 
     def _overlay_position(self, hs_hwnd, *, content_w: int = 420, content_h: int = 210):

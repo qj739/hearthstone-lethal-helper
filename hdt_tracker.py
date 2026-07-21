@@ -849,6 +849,10 @@ class HearthstoneTracker:
                         )
                     else:
                         print("覆盖层窗口已就绪")
+                    print(
+                        "提示: 浮层为独立置顶窗（默认），应叠在炉石画面上方；"
+                        "若只看到游戏，请 Alt+Tab 找到黑色控制台窗口。"
+                    )
                     if self.combo_overlay:
                         self.combo_overlay.start(wait_ready=8.0)
                 else:

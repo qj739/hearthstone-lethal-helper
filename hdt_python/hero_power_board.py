@@ -258,7 +258,13 @@ def apply_hero_power_to_fighters(
         return False, mana_budget, SpellApplyResult()
     _entity, defn, cost = row
     hp_res = defn.apply(
-        list(taunts or []), fighters, mult=1, enemy_shield=enemy_shield,
+        list(taunts or []),
+        fighters,
+        mult=1,
+        enemy_shield=enemy_shield,
+        gs=gs,
+        player_id=player_id,
+        next_turn_preview=next_turn,
     )
     if mana_budget is None:
         return True, None, hp_res

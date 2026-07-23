@@ -589,6 +589,82 @@ def _apply_wild_growth(taunts, fighters, *, mult, enemy_shield, spell_power=0, *
     return res
 
 
+def _friendly_played_deathrattle_ids(gs, player_id: int) -> List[str]:
+    """本局已打出的友方亡语牌（场面或坟场），供退货政策发现触发。"""
+    from .deathrattle import DEATHRATTLE_BY_CARD
+
+    if gs is None or player_id is None:
+        return []
+    seen = set()
+    out: List[str] = []
+    for e in gs.entities.values():
+        if not e.is_controlled_by(player_id, gs):
+            continue
+        zone = getattr(e, "zone", None) or (e.tags.get("ZONE") if e.tags else None)
+        if zone not in ("PLAY", "GRAVEYARD"):
+            continue
+        cid = e.card_id or ""
+        if not cid or cid in seen or cid not in DEATHRATTLE_BY_CARD:
+            continue
+        seen.add(cid)
+        out.append(cid)
+    return out
+
+
+def _apply_return_policy(
+    taunts,
+    fighters,
+    *,
+    mult,
+    enemy_shield,
+    gs=None,
+    player_id=None,
+    opponent_hero_hp=None,
+    spell_power=0,
+    **kw,
+) -> SpellApplyResult:
+    """退货政策：发现一张本局打出的友方亡语并触发（斩杀搜索取最优确定线）。"""
+    from .deathrattle import on_minion_died
+    from .spell_board import _resolve_opponent_hero_hp
+
+    cids = _friendly_played_deathrattle_ids(gs, player_id)
+    if not cids:
+        return SpellApplyResult()
+
+    hero_hp = (
+        opponent_hero_hp if opponent_hero_hp is not None
+        else _resolve_opponent_hero_hp(gs, player_id)
+    )
+    best_score = -1.0
+    best_res = SpellApplyResult()
+    best_taunts = None
+    best_fighters = None
+    for cid in cids:
+        ts = deepcopy(taunts)
+        fs = deepcopy(fighters)
+        dead = {"card_id": cid, "stolen_turn": True, "health": 0}
+        dr = on_minion_died(
+            dead, ts, fs,
+            enemy_shield=enemy_shield,
+            enemy_hero_hp=int(hero_hp or 0),
+        )
+        score = float(dr.face_damage) + float(
+            project_board_face_after_spell(ts, fs, enemy_shield) or 0
+        )
+        if score > best_score:
+            best_score = score
+            best_res = SpellApplyResult(
+                direct_face_damage=dr.face_damage,
+                opponent_lifesteal_heal=dr.opponent_lifesteal_heal,
+            )
+            best_taunts = ts
+            best_fighters = fs
+    if best_taunts is not None and best_fighters is not None:
+        taunts[:] = best_taunts
+        fighters[:] = best_fighters
+    return best_res
+
+
 def _apply_feral_rage(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw) -> SpellApplyResult:
     """野性之心：斩杀搜索取 +4 攻分支（忽略 8 甲）。"""
     bonus = _sd(4, mult=mult, spell_power=spell_power)
@@ -642,6 +718,7 @@ def _register_p0_other() -> None:
         (("OG_211", "CORE_OG_211"), 8, "兽群呼唤", _apply_call_of_the_wild, False),
         (("CFM_603",), 1, "疯狂药水", _apply_potion_of_madness, False),
         (("TOY_644",), 1, "红牌", _apply_red_card, False),
+        (("MIS_102",), 3, "退货政策", _apply_return_policy, False),
         (("EDR_461",), 5, "新月仪式", _apply_lunar_ritual, False),
         (("EDR_461t",), 5, "满月仪式", _apply_lunar_ritual, False),
     ]

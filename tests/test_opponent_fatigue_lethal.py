@@ -119,9 +119,47 @@ def test_opponent_deck_count_stable_while_entities_grow():
     assert lc._opponent_deck_count() == 1
 
 
+def test_fatigue_tag_from_battle_tag_power_log():
+    """战网名 TAG_CHANGE FATIGUE 须写入 Player 实体（否则永远疲1）。"""
+    import contextlib
+    import io
+    from pathlib import Path
+    from hdt_python.power_parser import PowerLogParser
+
+    log = Path(
+        r"C:\Program Files (x86)\Hearthstone\Logs"
+        r"\Hearthstone_2026_07_23_18_25_26\Power.log"
+    )
+    if not log.is_file():
+        print("SKIP fatigue battle-tag log")
+        return
+    # FATIGUE value=4 之后
+    target = 180000
+    with open(log, encoding="utf-8", errors="ignore") as f:
+        lines = f.readlines()
+    starts = [
+        i for i, l in enumerate(lines)
+        if "CREATE_GAME" in l and "GameState.DebugPrintPower" in l
+    ]
+    start = max(s for s in starts if s < target)
+    gs = GameState()
+    p = PowerLogParser(str(log), gs)
+    with contextlib.redirect_stdout(io.StringIO()):
+        for i in range(start, target):
+            p.process_line(lines[i].rstrip())
+    gs.in_game = True
+    lc = LethalChecker(gs)
+    assert lc._opponent_deck_count() == 0
+    assert lc._opponent_fatigue_counter() >= 4, lc._opponent_fatigue_counter()
+    assert lc.is_opponent_turn()
+    assert lc._opponent_upcoming_fatigue_damage() >= 4
+    print("OK fatigue from battle-tag log", lc._opponent_fatigue_counter())
+
+
 if __name__ == "__main__":
     test_opponent_turn_fatigue_added_to_face()
     test_local_turn_fatigue_not_counted()
     test_opponent_turn_with_cards_in_deck_no_fatigue()
     test_opponent_deck_count_stable_while_entities_grow()
+    test_fatigue_tag_from_battle_tag_power_log()
     print("OK opponent fatigue lethal")

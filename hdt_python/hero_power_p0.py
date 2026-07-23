@@ -15,8 +15,50 @@ if TYPE_CHECKING:
 
 
 def _apply_dh_claws(attack: int):
-    def _fn(t, f: List[dict], *, mult: int, **_kw) -> SpellApplyResult:
-        _add_temp_hero_attack(f, attack * mult, from_hero_power=True)
+    def _fn(
+        t,
+        f: List[dict],
+        *,
+        mult: int,
+        gs=None,
+        player_id=None,
+        next_turn_preview: bool = False,
+        **_kw,
+    ) -> SpellApplyResult:
+        """恶魔之爪：本回合 +N 攻；不提供额外攻击次数。
+
+        若场面已有英雄/武器挥击，则并入其攻击；否则仅在英雄仍有剩余攻击次数时
+        新建挥击（避免英雄已攻击后再造假挥击，误触发审判官跟刀）。
+        """
+        bonus = attack * mult
+        if bonus <= 0:
+            return SpellApplyResult()
+        for fighter in f:
+            if (
+                fighter.get("kind") in ("hero", "weapon")
+                and fighter.get("attacks_left", 0) > 0
+                and fighter.get("health", 0) > 0
+                and fighter.get("can_face", True)
+            ):
+                fighter["atk"] = int(fighter.get("atk", 0) or 0) + bonus
+                return SpellApplyResult()
+        for fighter in f:
+            if (
+                fighter.get("kind") in ("hero", "weapon")
+                and fighter.get("attacks_left", 0) > 0
+                and fighter.get("health", 0) > 0
+            ):
+                fighter["atk"] = int(fighter.get("atk", 0) or 0) + bonus
+                return SpellApplyResult()
+        if not next_turn_preview and gs is not None and player_id is not None:
+            from .board_damage import hero_has_unused_attack_slot
+
+            hero = gs.get_hero(player_id)
+            if hero is None or not hero_has_unused_attack_slot(
+                hero, gs.get_weapon(player_id), active_turn=True,
+            ):
+                return SpellApplyResult()
+        _add_temp_hero_attack(f, bonus, from_hero_power=True)
         return SpellApplyResult()
 
     return _fn
@@ -36,10 +78,21 @@ def _apply_mage_fireblast(t, f: List[dict], *, mult: int, enemy_shield: bool = F
     return _apply_best_minion_damage(t, f, dmg, enemy_shield=enemy_shield)
 
 
-def _apply_druid_shapeshift(t, f: List[dict], *, mult: int, **_kw) -> SpellApplyResult:
-    """变形：+1 攻（护甲 v1 不计场攻）。"""
-    _add_temp_hero_attack(f, 1 * mult, from_hero_power=True)
-    return SpellApplyResult()
+def _apply_druid_shapeshift(
+    t,
+    f: List[dict],
+    *,
+    mult: int,
+    gs=None,
+    player_id=None,
+    next_turn_preview: bool = False,
+    **_kw,
+) -> SpellApplyResult:
+    """变形：+1 攻（护甲 v1 不计场攻）；不提供额外攻击次数。"""
+    return _apply_dh_claws(1)(
+        t, f, mult=mult, gs=gs, player_id=player_id,
+        next_turn_preview=next_turn_preview, **_kw,
+    )
 
 
 def _apply_hunter_steady_shot(t, f: List[dict], *, mult: int, enemy_shield: bool = False, **_kw) -> SpellApplyResult:

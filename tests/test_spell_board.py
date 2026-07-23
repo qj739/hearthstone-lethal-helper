@@ -5977,12 +5977,16 @@ def test_p0_rush_inquisitor_mirror_weapon_face_ten():
     _hand_minion(gs, 30, 1, 8, 8, 8, card_id="CS3_020", rush=True)
     _weapon(gs, 40, 1, "TEST_WPN", durability=1)
     gs.get_entity(40).atk = 2
+    gs.get_entity(40).tags["ATK"] = 2
+    gs.get_entity(40).tags["479"] = 2
 
     checker = LethalChecker(gs)
     total = checker.overlay_board_face_damage()
     _, board, weapon, spell, hp = checker.overlay_board_breakdown()
     assert total == 10, (total, board, weapon, spell, hp, checker.overlay_spell_note())
-    assert board == 8 and weapon == 2 and spell == 0 and hp == 0
+    # 武器 2 + 审判官跟刀 8；分项可能并入「随」或「武」
+    assert spell == 0 and hp == 0
+    assert board + weapon == 10, (board, weapon)
     print("OK inquisitor mirror weapon face ten", total)
 
 

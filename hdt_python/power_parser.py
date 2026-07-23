@@ -572,11 +572,13 @@ _PLAYER_MANA_TAGS = frozenset({
     "MAXRESOURCES",
     "CORPSES",
 })
-# 写在 Player 战网名实体上、需同步到 Player 实体（连击等）
+# 写在 Player 战网名实体上、需同步到 Player 实体（连击、疲劳等）
 _PLAYER_TURN_TAGS = frozenset({
     "NUM_OPTIONS_PLAYED_THIS_TURN",
     "NUM_CARDS_PLAYED_THIS_TURN",
     "COMBO_ACTIVE",
+    "FATIGUE",
+    "FATIGUEREFERENCE",
 })
 
 # CREATE_GAME 前通常有 DebugPrintGame（PlayerName）；回放须包含这段前缀

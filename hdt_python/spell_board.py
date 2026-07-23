@@ -326,9 +326,11 @@ SPELL_REQUIRES_FRIENDLY_MINION = frozenset({
     "WW_027",  # 可靠陪伴
     "MAW_021",  # 问心无愧
     "CORE_MAW_021",
+    "CORE_BT_292", "BT_292",  # 阿达尔之手（斩杀搜索只对友方）
     "JAIL_913",  # 拦住他们！
     "ETC_201", "ETC_201t", "ETC_201t2",  # 一串香蕉
 })
+
 
 
 def enemy_board_has_targetable_minion(
@@ -1909,11 +1911,15 @@ _SPELL_SIM_TIER_OVERRIDES: Dict[str, SpellSimTier] = {
     "EDR_461": SpellSimTier.UTILITY,            # 新月仪式
     "EDR_461t": SpellSimTier.UTILITY,           # 满月仪式
     "WW_027": SpellSimTier.UTILITY,             # 可靠陪伴 +2/+3
+    "BT_292": SpellSimTier.UTILITY,             # 阿达尔之手 +2/+1
+    "CORE_BT_292": SpellSimTier.UTILITY,
+
     "ETC_210": SpellSimTier.DIRECT_FACE,        # 通灵最强音（脚本伤害）
     "VAC_427": SpellSimTier.DIRECT_FACE,        # 甜筒殡淇淋 3 直伤
     "ETC_717": SpellSimTier.UTILITY,             # 悦耳嘻哈：直伤+武器加攻，须 combo 模拟
     "ETC_717t": SpellSimTier.UTILITY,            # 刺耳嘻哈：直伤+武器加攻，须 combo 模拟
     "TOY_642": SpellSimTier.CLEAR_BOARD,        # 球霸野猪人：最低血敌人，非纯打脸
+    "MIS_102": SpellSimTier.CLEAR_AND_FACE,     # 退货政策：触发本局友方亡语
     "SW_040": SpellSimTier.CLEAR_BOARD,         # 邪能弹幕：最低血敌人，可先打脸再弹幕
     "REV_290": SpellSimTier.UTILITY,            # 赎罪教堂 +2/+1
     "CORE_REV_290": SpellSimTier.UTILITY,
@@ -1927,6 +1933,7 @@ _SPELL_SIM_TIER_OVERRIDES: Dict[str, SpellSimTier] = {
     "ETC_201": SpellSimTier.UTILITY,            # 一串香蕉 +1/+1 ×3
     "ETC_201t": SpellSimTier.UTILITY,
     "ETC_201t2": SpellSimTier.UTILITY,
+    "JAIL_326": SpellSimTier.UTILITY,           # 审判：复制友方属性到双方其他随从
     "ETC_082": SpellSimTier.UTILITY,            # 绝望哀歌：灵活解场+召唤，非纯打脸前缀
     "EDR_874": SpellSimTier.UTILITY,            # 星体平衡：生成月火+星火链，须完整 combo
 }

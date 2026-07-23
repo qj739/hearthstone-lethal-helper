@@ -415,6 +415,7 @@ class LethalChecker:
         """
         对手牌库空时，下回合斩杀预览中可计入的疲劳伤害。
         对方回合（Overlay 下回合斩）时：对手本回合开始抽牌会吃疲劳，日志 HP 可能滞后。
+        FATIGUE 标签 = 本回合已结算的疲劳次数/伤害；牌库空且从未疲劳时按 1 计。
         我方回合：对手疲劳发生在我们回合结束之后，不计入本回合斩杀。
         """
         if not self.is_opponent_turn():
@@ -422,7 +423,8 @@ class LethalChecker:
         if self._opponent_deck_count() > 0:
             return 0
         fatigue = self._opponent_fatigue_counter()
-        return max(1, fatigue)
+        # FATIGUE=0：本回合抽牌疲劳尚未写入（或首次疲劳）→ 下一次为 1
+        return fatigue if fatigue > 0 else 1
 
     def _lethal_threshold_hp(self, *, subtract_overlay_lifesteal: bool = False) -> int:
         """

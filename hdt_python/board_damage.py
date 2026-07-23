@@ -1128,6 +1128,33 @@ def hero_weapon_strike_damage(
     return base + missing
 
 
+def hero_has_unused_attack_slot(
+    hero_entity: "Entity",
+    weapon_entity: Optional["Entity"] = None,
+    *,
+    active_turn: bool = True,
+) -> bool:
+    """英雄本回合是否还剩可挥击次数（不计当前攻击力是否为 0）。
+
+    用于恶魔之爪等「只加攻、不给额外攻击次数」的效果：英雄已攻击完毕时
+    不应再生成假挥击（否则会误触发伊利达雷审判官跟刀）。
+    """
+    if not active_turn:
+        return True
+    if _tag(hero_entity, "CANT_ATTACK") or _tag(hero_entity, "FROZEN"):
+        return False
+    silenced = is_silenced(hero_entity)
+    max_a = attacks_per_turn(hero_entity, silenced)
+    used = effective_attacks_this_turn(hero_entity, active_turn=True)
+    left = max(max_a - used, 0)
+    if left <= 0:
+        return False
+    if weapon_entity is not None and weapon_entity.current_durability <= 0:
+        # 武器已碎且英雄无空手攻次数：仍可能靠技能加攻出拳，次数已由 left 覆盖
+        pass
+    return True
+
+
 def hero_can_attack_with_weapon(
     hero_entity: "Entity",
     weapon_entity: Optional["Entity"],

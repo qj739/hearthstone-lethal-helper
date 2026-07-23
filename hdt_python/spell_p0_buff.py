@@ -52,6 +52,76 @@ def _apply_equality(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_k
     return SpellApplyResult()
 
 
+def _pick_judgment_template(
+    fighters: List[dict],
+    gs=None,
+    player_id=None,
+):
+    """审判：选攻击力最高的友方随从作模板（优先本回合可出手）。"""
+    from .spell_board import _friendly_spell_target_minions
+
+    cands = _friendly_spell_target_minions(fighters, gs, player_id)
+    if not cands:
+        return None
+    best = max(
+        cands,
+        key=lambda item: (
+            1 if int(item[2].get("attacks_left", 0) or 0) > 0 else 0,
+            int(item[2].get("atk", 0) or 0),
+            int(item[2].get("health", 0) or 0),
+        ),
+    )
+    return best[2]
+
+
+def _set_minion_atk_health(unit: dict, atk: int, health: int) -> dict:
+    out = dict(unit)
+    out["atk"] = max(0, int(atk))
+    hp = max(1, int(health))
+    out["health"] = hp
+    if "max_health" in out:
+        out["max_health"] = hp
+    return out
+
+
+def _apply_judgment_violet(
+    taunts,
+    fighters,
+    *,
+    mult,
+    enemy_shield,
+    gs=None,
+    player_id=None,
+    **_kw,
+) -> SpellApplyResult:
+    """
+    审判 JAIL_326（逃离紫罗兰监狱）：
+    选择一个友方随从，将双方其他随从的攻击力/生命值变为与其相同。
+    """
+    template = _pick_judgment_template(fighters, gs=gs, player_id=player_id)
+    if template is None:
+        return SpellApplyResult()
+    atk = int(template.get("atk", 0) or 0)
+    hp = max(1, int(template.get("health", 0) or 0))
+    tid = template.get("entity_id")
+
+    for i, f in enumerate(fighters):
+        if f.get("kind") != "minion" or f.get("health", 0) <= 0:
+            continue
+        if tid is not None and f.get("entity_id") == tid:
+            continue
+        fighters[i] = _set_minion_atk_health(f, atk, hp)
+
+    for i, t in enumerate(taunts):
+        if t.get("kind") == "hero" or t.get("health", 0) <= 0:
+            continue
+        if tid is not None and t.get("entity_id") == tid:
+            continue
+        taunts[i] = _set_minion_atk_health(t, atk, hp)
+
+    return SpellApplyResult()
+
+
 def _buff_equipped_weapon(fighters: List[dict], bonus_atk: int) -> None:
     """给已装备且可参与攻击模拟的武器 +攻（无武器则无效）。"""
     bonus = max(0, int(bonus_atk))
@@ -220,6 +290,30 @@ def _apply_reliable_companion(
     return SpellApplyResult()
 
 
+def _apply_hand_of_adal(
+    taunts,
+    fighters,
+    *,
+    mult,
+    enemy_shield,
+    spell_power=0,
+    gs=None,
+    player_id=None,
+    **_kw,
+) -> SpellApplyResult:
+    """阿达尔之手：使一个随从获得 +2/+1（抽牌 v1 不模拟；斩杀搜索只 buff 友方可攻者）。"""
+    picked = _pick_best_spell_target_fighter(fighters, gs=gs, player_id=player_id)
+    if picked is None:
+        return SpellApplyResult()
+    _apply_buff_to_spell_target(
+        fighters,
+        picked,
+        bonus_atk=_sd(2, mult=mult, spell_power=spell_power),
+        bonus_health=_sd(1, mult=mult, spell_power=spell_power),
+    )
+    return SpellApplyResult()
+
+
 def _apply_spikeridged_steed(
     taunts,
     fighters,
@@ -355,6 +449,8 @@ def _register_p0_buff() -> None:
         (("CATA_138",), 3, "森林赠礼", _apply_forests_gift, False),
         (("WW_027",), 2, "可靠陪伴", _apply_reliable_companion, False),
         (("MAW_021", "CORE_MAW_021"), 3, "问心无愧", _apply_reliable_companion, False),
+        (("CORE_BT_292", "BT_292"), 2, "阿达尔之手", _apply_hand_of_adal, False),
+
         (("CORE_UNG_952", "UNG_952"), 5, "剑龙骑术", _apply_spikeridged_steed, False),
         (("JAIL_447t",), 4, "侦探服", _apply_detectives_clothes, False),
         (("VAC_917t",), 1, "防晒霜", _apply_sunscreen, False),
@@ -363,6 +459,7 @@ def _register_p0_buff() -> None:
         (("TOY_716",), 4, "光速抢购", _apply_flash_sale, False),
         (("ETC_717", "ETC_717t"), 2, "悦耳嘻哈", _apply_hip_hop, False),
         (("ETC_201", "ETC_201t", "ETC_201t2"), 1, "一串香蕉", _apply_banana_bunch, False),
+        (("JAIL_326",), 6, "审判", _apply_judgment_violet, False),
         (("CORE_EX1_619", "EX1_619"), 2, "生而平等", _apply_equality, False),
     ]
     for card_ids, cost, name, fn, uses_random in specs:

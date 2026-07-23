@@ -524,15 +524,16 @@ def vilerok_hand_attack_zone(gs: "GameState", entity: "Entity") -> bool:
     return zone == "PLAY" and not _entity_on_board_slots(gs, entity)
 
 
-# 黑暗之赐「活体梦魇」：手牌阶段常无 CHARGE 标签，靠附魔或 HAS_DARK_GIFT 指向的 gift 实体识别
+# 黑暗之赐「梦境行者」：手牌阶段常无 CHARGE 标签，靠附魔或 HAS_DARK_GIFT 指向的 gift 实体识别
+# 注意：EDR_100t5「活体梦魇」是打出时召唤 2/2 复制，不是冲锋（易与 t6 混淆）
 _DARK_GIFT_CHARGE_IDS = frozenset({
-    "EDR_100t5",
-    "EDR_100t5e",
+    "EDR_100t6",
+    "EDR_100t6e",
 })
 
 
 def _is_dark_gift_charge_card(card_id: str) -> bool:
-    return card_id in _DARK_GIFT_CHARGE_IDS or card_id.startswith("EDR_100t5")
+    return card_id in _DARK_GIFT_CHARGE_IDS or card_id.startswith("EDR_100t6")
 
 
 def has_dark_gift_charge(gs: "GameState", entity: "Entity") -> bool:

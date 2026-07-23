@@ -40,7 +40,7 @@ class PowerRegex:
 
     # 实体创建
     FULL_ENTITY = re.compile(
-        r"FULL_ENTITY\s+-\s+(?:Creating|Updating)\s+(?:ID=(?P<id>\d+)|(?P<bracket>"
+        r"FULL_ENTITY\s+-\s+(?P<action>Creating|Updating)\s+(?:ID=(?P<id>\d+)|(?P<bracket>"
         + _BRACKET_ENTITY
         + r"))"
         r"(?:\s+CardID=(?P<card_id>[\w_]*))?"
@@ -631,6 +631,9 @@ class PowerLogParser(LogWatcher):
         self._pending_transform_eids: set = set()
         # CHANGE_ENTITY 后日志常写 NUM_TURNS_IN_PLAY=0；已在场且本回合未攻击的随从应保留原值
         self._transform_preserve_ntp: Dict[int, int] = {}
+        # FULL_ENTITY Updating：方括号 zone 与行内 tag=ZONE 冲突时（回溯快照）以方括号为准
+        self._full_entity_is_updating = False
+        self._full_entity_bracket_zone: Optional[str] = None
         self.lines_processed = 0
         self._last_create_game_line = -100000
         self._game_end_emitted = False
@@ -711,6 +714,8 @@ class PowerLogParser(LogWatcher):
             self.game_state.begin_new_game()
             self._pending_transform_eids.clear()
             self._transform_preserve_ntp.clear()
+            self._full_entity_is_updating = False
+            self._full_entity_bracket_zone = None
             if self._live_mode:
                 self._awaiting_live_signal = False
                 self._live_match_active = True
@@ -747,6 +752,11 @@ class PowerLogParser(LogWatcher):
         # Player 定义行
         if "Player EntityID=" in line:
             self._handle_player_entity(line)
+            return
+
+        # 时光回溯等：RESET_GAME 后会 FULL_ENTITY 重放场面，先清掉未再出现的随从
+        if "RESET_GAME" in line:
+            self._handle_reset_game()
             return
 
         # FULL_ENTITY
@@ -797,7 +807,27 @@ class PowerLogParser(LogWatcher):
             self._flush_pending_transforms()
             self.game_state.current_block_type = None
             self.game_state.current_entity_id = None
+            self._full_entity_is_updating = False
+            self._full_entity_bracket_zone = None
             return
+
+    def _handle_reset_game(self) -> None:
+        """RESET_GAME（时光回溯）：场面先清空，由后续 FULL_ENTITY 恢复仍存在的实体。"""
+        gs = self.game_state
+        gs.board_slots.clear()
+        for eid, ent in list(gs.entities.items()):
+            if ent.is_hero:
+                continue
+            if entity_zone(ent) != "PLAY":
+                continue
+            if not (ent.is_minion or ent.is_weapon or entity_cardtype(ent) == "LOCATION"):
+                continue
+            ent.zone = "SETASIDE"
+            ent.tags["ZONE"] = 6
+            ent.tags.pop("ZONE_POSITION", None)
+            gs.remove_entity_from_board_slots(eid)
+        self._full_entity_is_updating = False
+        self._full_entity_bracket_zone = None
 
     def _handle_debug_print_game(self, content: str):
         """客户端 DebugPrintGame：带真实 # 战网名的 PlayerID 即本地玩家（对手为 UNKNOWN HUMAN PLAYER）。"""
@@ -950,6 +980,9 @@ class PowerLogParser(LogWatcher):
         """处理 FULL_ENTITY"""
         eid = None
         card_id = match.group("card_id")
+        action = (match.group("action") or "Creating").strip()
+        self._full_entity_is_updating = action == "Updating"
+        self._full_entity_bracket_zone = None
 
         # ID=数字 形式
         if match.group("id"):
@@ -963,6 +996,8 @@ class PowerLogParser(LogWatcher):
                 eid = int(bm.group("id"))
                 if not card_id and bm.group("card_id"):
                     card_id = bm.group("card_id")
+                if bm.group("zone"):
+                    self._full_entity_bracket_zone = bm.group("zone").upper()
 
         if eid:
             entity = self.game_state.get_entity(eid)
@@ -971,14 +1006,20 @@ class PowerLogParser(LogWatcher):
                     entity.reset_for_new_card(card_id)
                 else:
                     entity.card_id = card_id
-            if match.group("bracket"):
-                bm = PowerRegex.ENTITY_BRACKET.search(match.group("bracket"))
-                # 归属与区域仅由后续 tag=CONTROLLER / tag=ZONE 行决定（对齐 HDT/hslog）
+            # Updating 且方括号标明非 PLAY：先落到该区域，避免行内历史 ZONE=PLAY 把坟场单位复活
+            if (
+                self._full_entity_is_updating
+                and self._full_entity_bracket_zone
+                and self._full_entity_bracket_zone != "PLAY"
+            ):
+                self._apply_tag(eid, "ZONE", self._full_entity_bracket_zone)
             self.game_state.current_entity_id = eid
             self.emit("entity_created", entity)
 
     def _handle_show_entity(self, match: re.Match):
         """处理 SHOW_ENTITY"""
+        self._full_entity_is_updating = False
+        self._full_entity_bracket_zone = None
         entity_str = match.group("entity")
         card_id = match.group("card_id")
         eid = None
@@ -1344,6 +1385,26 @@ class PowerLogParser(LogWatcher):
             preserve = self._transform_preserve_ntp.pop(entity_id, None)
             if preserve is not None and preserve >= 1:
                 int_value = preserve
+
+        # FULL_ENTITY Updating：方括号为 GRAVEYARD 等时，忽略行内历史 ZONE=PLAY（时光回溯快照）
+        if tag == "ZONE":
+            zones_probe = [
+                "", "PLAY", "DECK", "HAND", "GRAVEYARD",
+                "REMOVEDFROMGAME", "SETASIDE", "SECRET",
+            ]
+            if value.isdigit():
+                zi = int(value)
+                new_zone = zones_probe[zi] if 0 <= zi < len(zones_probe) else value
+            else:
+                new_zone = value.upper() if value else ""
+            bracket_z = (self._full_entity_bracket_zone or "").upper()
+            if (
+                self._full_entity_is_updating
+                and bracket_z
+                and bracket_z != "PLAY"
+                and new_zone == "PLAY"
+            ):
+                return
 
         if int_value is not None:
             entity.tags[tag] = int_value

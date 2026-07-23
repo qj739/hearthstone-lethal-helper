@@ -22,6 +22,7 @@ class DrKind(str, Enum):
     SUMMON_ENEMY = "summon_enemy"
     SUMMON_ATTACK_ATTACKERS = "summon_attack_attackers"
     ENEMY_ARMOR = "enemy_armor"
+    ENEMY_HERO_HEAL = "enemy_hero_heal"
 
 
 @dataclass(frozen=True)
@@ -96,6 +97,14 @@ DEATHRATTLE_BY_CARD: Dict[str, DeathrattleDef] = {
     # 亡语护甲
     "SW_068": DeathrattleDef(DrKind.ENEMY_ARMOR, amount=8),
     "CORE_SW_068": DeathrattleDef(DrKind.ENEMY_ARMOR, amount=8),
+    # 亡语回血（抬高斩杀有效血）
+    # 预言师：亡语为己方英雄恢复生命（对局日志为 6，与 6/6 基础攻一致）
+    "JAIL_912": DeathrattleDef(DrKind.ENEMY_HERO_HEAL, amount=6),
+    # 光沐元素：亡语为所有友方角色恢复 8（斩杀只计英雄回血）
+    "BAR_310": DeathrattleDef(DrKind.ENEMY_HERO_HEAL, amount=8),
+    "CORE_BAR_310": DeathrattleDef(DrKind.ENEMY_HERO_HEAL, amount=8),
+    # 癫狂的医生
+    "GIL_118": DeathrattleDef(DrKind.ENEMY_HERO_HEAL, amount=8),
     # 甲龙：2 只 3/3 野兽各随机攻击一次（简化，不留场）
     "DINO_422": DeathrattleDef(
         DrKind.SUMMON_ATTACK_ATTACKERS,
@@ -120,6 +129,13 @@ def sim_armor_gain(enemy_board: List[dict]) -> int:
     """模拟中敌方亡语获得的额外护甲（如莫尔葛熔魔）。"""
     if enemy_board and enemy_board[0].get("kind") == "sim_meta":
         return int(enemy_board[0].get("armor", 0) or 0)
+    return 0
+
+
+def sim_hero_heal(enemy_board: List[dict]) -> int:
+    """模拟中敌方亡语为英雄回复的生命（如预言师 / 光沐元素）。"""
+    if enemy_board and enemy_board[0].get("kind") == "sim_meta":
+        return int(enemy_board[0].get("hero_heal", 0) or 0)
     return 0
 
 
@@ -512,6 +528,13 @@ def on_minion_died(
         meta = _ensure_sim_meta(enemy_board)
         meta["armor"] = int(meta.get("armor", 0) or 0) + gain
         result.armor_gain += gain
+
+    elif kind == DrKind.ENEMY_HERO_HEAL and not friendly:
+        # 敌方英雄回血：写入 sim_meta，并计入 result（法术路径若消费 result）
+        heal = max(effect.amount, 0)
+        meta = _ensure_sim_meta(enemy_board)
+        meta["hero_heal"] = int(meta.get("hero_heal", 0) or 0) + heal
+        result.opponent_lifesteal_heal += heal
 
     return result
 

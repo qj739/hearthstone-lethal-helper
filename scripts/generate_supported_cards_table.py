@@ -130,6 +130,8 @@ def _end_turn_note(defn: Any) -> str:
         parts.append("用自身攻击力")
     if getattr(defn, "requires_dormant", False):
         parts.append("休眠")
+    if getattr(defn, "requires_secret", False):
+        parts.append("需奥秘")
     return _md_cell("，".join(parts))
 
 

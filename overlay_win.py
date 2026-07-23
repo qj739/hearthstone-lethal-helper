@@ -298,7 +298,8 @@ class Overlay:
     _THEMES = {
         THEME_NORMAL: {"bg": (255, 255, 255), "fg": (0, 0, 0)},
         THEME_MY_LETHAL: {"bg": (210, 45, 45), "fg": (255, 255, 255)},
-        THEME_OPP_LETHAL: {"bg": (160, 30, 30), "fg": (255, 255, 255)},
+        # 敌方斩杀：蓝底白字，与我方红底区分
+        THEME_OPP_LETHAL: {"bg": (35, 110, 220), "fg": (255, 255, 255)},
         THEME_DARK: {"bg": (28, 32, 38), "fg": (230, 235, 240)},
         THEME_LIGHT: {"bg": (248, 249, 251), "fg": (24, 28, 32)},
         THEME_TRANSPARENT: {"bg": (18, 20, 24), "fg": (220, 225, 230)},

@@ -44,18 +44,16 @@ def _apply_druid_shapeshift(t, f: List[dict], *, mult: int, **_kw) -> SpellApply
 
 def _apply_hunter_steady_shot(t, f: List[dict], *, mult: int, enemy_shield: bool = False, **_kw) -> SpellApplyResult:
     """稳固射击：对敌方英雄造成 2 点伤害（无视嘲讽）。"""
-    from .board_damage import apply_divine_shield_to_hits
+    from .spell_board import _apply_direct_face
 
-    face = apply_divine_shield_to_hits([2 * mult], enemy_shield)
-    return SpellApplyResult(direct_face_damage=face)
+    return _apply_direct_face(2 * mult, enemy_shield)
 
 
 def _apply_void_spike(t, f: List[dict], *, mult: int, enemy_shield: bool = False, **_kw) -> SpellApplyResult:
     """虔诚者泽瑞拉「虚空之刺」：对敌方英雄造成 5 点伤害（无视嘲讽）。"""
-    from .board_damage import apply_divine_shield_to_hits
+    from .spell_board import _apply_direct_face
 
-    face = apply_divine_shield_to_hits([5 * mult], enemy_shield)
-    return SpellApplyResult(direct_face_damage=face)
+    return _apply_direct_face(5 * mult, enemy_shield)
 
 
 def _apply_dk_ghoul_charge(atk: int, health: int):

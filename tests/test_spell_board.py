@@ -85,7 +85,7 @@ def _hand_minion(gs, eid, pid, atk, hp, cost, *, card_id="TEST_MINION", charge=F
         m.tags["HAS_DARK_GIFT"] = 1
         enc = gs.get_entity(eid + 9000)
         enc.cardtype = "ENCHANTMENT"
-        enc.card_id = "EDR_100t5e"
+        enc.card_id = "EDR_100t6e"  # 梦境行者（冲锋）；勿用 EDR_100t5e 活体梦魇
         enc.tags["ATTACHED"] = eid
         enc.tags["CARDTYPE"] = "ENCHANTMENT"
     return m
@@ -908,7 +908,7 @@ def test_p0_grish_stinger_stale_script_tag_after_entity_reuse():
     assert spell_script_damage(e) == 2
     defn = get_board_spell_def("TLC_630t")
     hand = [(e, defn, 1)]
-    _, face, mana = pack_no_taunt_direct_face_spells(hand, 10, gs=gs, player_id=1)
+    _, face, mana, _raw = pack_no_taunt_direct_face_spells(hand, 10, gs=gs, player_id=1)
     assert face == 2, face
     assert mana == 1, mana
 
@@ -1932,7 +1932,7 @@ def test_pack_no_taunt_direct_face_powered_rite_twilight():
         hand_entry(31, "TLC_630t"),
         hand_entry(32, "TLC_630t"),
     ]
-    _, face, mana = pack_no_taunt_direct_face_spells(hand, 4, gs=gs, player_id=1)
+    _, face, mana, _raw = pack_no_taunt_direct_face_spells(hand, 4, gs=gs, player_id=1)
     assert face == 7, face
     assert mana == 4, mana
     print("OK pack no taunt powered rite twilight stingers")
@@ -4189,6 +4189,39 @@ def test_dark_gift_charge_face_no_taunt():
     assert "手牌冲锋:" in checker.overlay_spell_note()
     assert "5攻冲锋" in checker.overlay_spell_note()
     print("OK dark gift charge face no taunt")
+
+
+def test_living_nightmare_not_charge_mountain_bear():
+    """活体梦魇 EDR_100t5e 不是冲锋；山岭野熊带该附魔不得计入手牌冲锋。"""
+    from hdt_python.board_damage import collect_hand_charge_minions, hand_minion_has_charge
+
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    _hero(gs, 1, 1, mana=10)
+    _hero(gs, 2, 2)
+    bear = _hand_minion(gs, 142, 1, 5, 6, 6, card_id="CORE_AV_337")
+    bear.tags["HAS_DARK_GIFT"] = 1
+    enc = gs.get_entity(147)
+    enc.cardtype = "ENCHANTMENT"
+    enc.card_id = "EDR_100t5e"
+    enc.tags["ATTACHED"] = 142
+    enc.tags["CARDTYPE"] = "ENCHANTMENT"
+    # 曾误把 t5 当冲锋；gift 实体仍在坟场时也不应误判
+    gift = gs.get_entity(145)
+    gift.card_id = "EDR_100t5"
+    gift.cardtype = "SPELL"
+    gift.zone = "GRAVEYARD"
+    gift.tags["ZONE"] = "GRAVEYARD"
+    bear.tags["HAS_DARK_GIFT"] = 145  # 选牌过程中曾指向 gift 实体
+
+    assert not hand_minion_has_charge(gs, bear)
+    assert collect_hand_charge_minions(gs, 1) == []
+
+    checker = LethalChecker(gs)
+    assert checker.overlay_board_face_damage() == 0
+    assert "手牌冲锋" not in checker.overlay_spell_note()
+    print("OK living nightmare not charge mountain bear")
 
 
 def test_p0_double_agent_charge_copy_face():
@@ -6510,6 +6543,7 @@ if __name__ == "__main__":
     test_hand_effect_active_outcast_flash_flood()
     test_vendetta_cost_when_powered_up()
     test_dark_gift_charge_face_no_taunt()
+    test_living_nightmare_not_charge_mountain_bear()
     test_p0_double_agent_charge_copy_face()
     test_p0_double_agent_charge_no_other_class_single_face()
     test_p0_double_agent_charge_combo_hand_not_board()

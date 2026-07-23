@@ -100,6 +100,66 @@ def test_infused_play_from_power_log():
     assert spell_effective_cost(touch, gs, 2) == 2
 
 
+def test_pack_infused_touch_counts_bounce():
+    """无嘲讽直伤前缀：注能之触应计 3+3=6，并占用 4 费。"""
+    from hdt_python.spell_board import (
+        pack_no_taunt_direct_face_spells,
+        get_board_spell_def,
+        partition_hand_spells_by_tier,
+    )
+    from hdt_python.battlecry_board import hand_all_board_plays
+
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    touch = _hand_spell(gs, 40, 1, "REV_601t")
+    hand = [(touch, get_board_spell_def("REV_601t"), 2)]
+    steps, face, mana, raw = pack_no_taunt_direct_face_spells(
+        hand, 4, gs=gs, player_id=1,
+    )
+    assert face == 6, face
+    assert raw == 6, raw
+    assert mana == 4, mana
+    assert len(steps) == 1
+
+
+def test_log_infused_touch_lethal_before_play():
+    """日志回放：15 血 + 场 9 + 注能之触双次 6 (+火冲) 应斩。"""
+    log = Path(
+        r"C:\Program Files (x86)\Hearthstone\Logs"
+        r"\Hearthstone_2026_07_22_12_18_28\Power.log"
+    )
+    if not log.is_file():
+        print("SKIP (log missing)")
+        return
+    from hdt_python.lethal_checker import LethalChecker
+
+    lines = log.read_text(encoding="utf-8", errors="ignore").splitlines()
+    target = 1097000
+    starts = [
+        i for i, l in enumerate(lines[:target])
+        if "CREATE_GAME" in l and "GameState.DebugPrintPower" in l
+    ]
+    start = starts[-1]
+    gs = GameState()
+    p = PowerLogParser(str(log), gs)
+    with contextlib.redirect_stdout(io.StringIO()):
+        for i in range(start, target):
+            if lines[i].strip():
+                p.process_line(lines[i].rstrip())
+    gs.local_player_id = 2
+    gs.opponent_player_id = 1
+    touch = next(c for c in gs.get_hand(2) if c.card_id == "REV_601t")
+    assert _frozen_touch_infused(touch)
+
+    lc = LethalChecker(gs)
+    face = lc.overlay_board_face_damage()
+    eff = lc.get_opponent_effective_hp()
+    assert face >= eff, (face, eff, lc.overlay_spell_note(), lc.overlay_board_breakdown())
+    assert lc.overlay_red_prompt_ok() or lc.calculate_lethal()[2]
+    print("OK log infused touch lethal", face, eff, lc.overlay_spell_note())
+
+
 if __name__ == "__main__":
     test_infused_returns_to_hand()
     test_uninfused_no_return()
@@ -107,4 +167,6 @@ if __name__ == "__main__":
     test_double_touch_same_turn_with_mana()
     test_double_touch_skipped_without_mana()
     test_infused_play_from_power_log()
+    test_pack_infused_touch_counts_bounce()
+    test_log_infused_touch_lethal_before_play()
     print("OK frozen touch infuse")

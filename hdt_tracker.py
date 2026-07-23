@@ -382,8 +382,14 @@ class HearthstoneTracker:
         )
         my_health, my_armor, _ = self.lethal_checker.get_my_health()
         my_total = my_health + my_armor
-        opp_threat = self.lethal_checker.opponent_overlay_face_damage()
-        opp_lethal_now = is_opp_turn and opp_threat >= my_total
+        # 随机法术（永世裂痕等）用 MC 概率，避免把乐观上限当成确定敌斩
+        opp_threat, opp_lethal_prob, opp_uses_random = (
+            self.lethal_checker.opponent_overlay_threat_stats()
+        )
+        opp_lethal_now = False
+        if is_opp_turn and opp_threat >= my_total:
+            if (not opp_uses_random) or opp_lethal_prob >= MIN_LETHAL_PROMPT_PROB:
+                opp_lethal_now = True
 
         # 先算场攻（独立预算），避免斩杀搜索超时污染场攻缓存
         self.lethal_checker.overlay_board_face_damage()

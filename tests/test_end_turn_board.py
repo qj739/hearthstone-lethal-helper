@@ -665,6 +665,48 @@ def test_brasswing():
     print("OK brasswing +2", face)
 
 
+def _put_secret(gs, eid, pid, card_id="EX1_289"):
+    """挂一张己方奥秘到 SECRET 区。"""
+    s = gs.get_entity(eid)
+    s.cardtype = "SPELL"
+    s.controller = pid
+    s.zone = "SECRET"
+    s.card_id = card_id
+    s.tags["ZONE"] = "SECRET"
+    s.tags["CARDTYPE"] = "SPELL"
+    s.tags["SECRET"] = 1
+    return s
+
+
+def test_chatty_bartender_needs_secret():
+    """健谈的调酒师：无奥秘不触发；有奥秘回合结束 +2 打脸。"""
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.in_game = True
+    _set_local_turn(gs, 1)
+    _hero(gs, 1, 1)
+    _hero(gs, 2, 2)
+    _minion_db(gs, 10, 1, "REV_513", can_attack=False)
+
+    face0, notes0 = end_turn_face_damage(
+        _board_entities(gs, 1), [], False, game_state=gs, player_id=1,
+    )
+    assert face0 == 0, f"no secret should be 0, got {face0} {notes0}"
+
+    _put_secret(gs, 50, 1)
+    face1, notes1 = end_turn_face_damage(
+        _board_entities(gs, 1), [], False, game_state=gs, player_id=1,
+    )
+    assert face1 == 2, f"with secret expected 2, got {face1}"
+    assert any("健谈的调酒师" in n for n in notes1), notes1
+
+    lc = LethalChecker(gs)
+    total = lc.overlay_board_face_damage()
+    assert total >= 2, (total, lc.overlay_combo_display_lines())
+    print("OK chatty bartender +2 with secret", face1, "overlay", total)
+
+
 def test_priestess_of_fury():
     """愤怒的女祭司：乐观上界 +6 打脸。"""
     gs = GameState()
@@ -1024,6 +1066,7 @@ if __name__ == "__main__":
     test_quick_lethal_includes_end_turn()
     test_scalecleaver_warden()
     test_brasswing()
+    test_chatty_bartender_needs_secret()
     test_priestess_of_fury()
     test_runaway_blackwing_end_turn_never_faces()
     test_earthen_dragon()

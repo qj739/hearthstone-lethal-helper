@@ -42,6 +42,7 @@ class EndTurnDef:
     summon_count: int = 1
     uses_self_atk: bool = False
     requires_dormant: bool = False
+    requires_secret: bool = False
     uses_random: bool = False
     name: str = ""
 
@@ -50,6 +51,11 @@ END_TURN_BY_CARD: Dict[str, EndTurnDef] = {
     "TOY_647": EndTurnDef(  # 8费 12/12
         EtKind.ALL_ENEMIES_DAMAGE, amount=3,
         requires_dormant=True, name="玛瑟里顿",
+    ),
+    # 4费 4/4：回合结束若控制奥秘，对所有敌人（含英雄）造成 2 点伤害
+    "REV_513": EndTurnDef(
+        EtKind.ALL_ENEMIES_DAMAGE, amount=2,
+        requires_secret=True, name="健谈的调酒师",
     ),
     "TOY_601": EndTurnDef(  # 10费 6/7；token TOY_601t2 6/7
         EtKind.SUMMON_ATTACK_RANDOM, summon_atk=6, summon_health=7,
@@ -297,6 +303,34 @@ def _resolve_end_turn_def(card_id: str) -> Optional[EndTurnDef]:
     if card_id.startswith("CORE_"):
         return END_TURN_BY_CARD.get(card_id[5:])
     return END_TURN_BY_CARD.get("CORE_" + card_id)
+
+
+def player_controls_secret(
+    game_state: Optional["GameState"],
+    player_id: Optional[int],
+) -> bool:
+    """己方 SECRET 区是否有奥秘（健谈的调酒师等条件）。"""
+    if game_state is None or player_id is None:
+        return False
+    for e in game_state.get_player_entities(player_id, "SECRET"):
+        if int(e.tags.get("SECRET", 0) or 0) == 1:
+            return True
+        # 部分日志未打 SECRET 标记：SECRET 区的法术仍视为奥秘
+        ctype = (getattr(e, "cardtype", None) or e.tags.get("CARDTYPE") or "")
+        if str(ctype).upper() == "SPELL":
+            return True
+    return False
+
+
+def _skip_for_missing_secret(
+    defn: EndTurnDef,
+    game_state: Optional["GameState"],
+    player_id: Optional[int],
+) -> bool:
+    """requires_secret 且当前未控制奥秘时跳过。"""
+    if not defn.requires_secret:
+        return False
+    return not player_controls_secret(game_state, player_id)
 
 
 def _living_enemy_minions(enemy_board: List[dict]) -> List[dict]:
@@ -659,6 +693,8 @@ def end_turn_face_damage(
             continue
         if defn.requires_dormant and not is_dormant(entity):
             continue
+        if _skip_for_missing_secret(defn, game_state, player_id):
+            continue
         if _skip_dormant_end_turn_next_turn_preview(
             entity, defn, game_state, player_id,
         ):
@@ -751,6 +787,8 @@ def end_turn_names_on_board(
         if not defn:
             continue
         if defn.requires_dormant and not is_dormant(entity):
+            continue
+        if _skip_for_missing_secret(defn, game_state, player_id):
             continue
         if _skip_dormant_end_turn_next_turn_preview(
             entity, defn, game_state, player_id,

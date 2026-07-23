@@ -54,6 +54,8 @@ class SpellApplyResult:
     # (card_id, cost, override_damage)；override_damage>0 时覆盖默认伤害
     mana_crystal_gain: int = 0  # 野性成长等：增加剩余可用法力
     consume_hand_entity_ids: Tuple[int, ...] = ()
+    # 本步是否对敌方英雄造成过伤害（含圣盾吸收）：后续步骤应按无盾结算
+    broke_enemy_hero_shield: bool = False
 
 
 @dataclass(frozen=True)
@@ -553,8 +555,12 @@ def _target_key(unit: dict):
 
 
 def _apply_direct_face(damage: int, enemy_shield: bool) -> SpellApplyResult:
-    face = apply_divine_shield_to_hits([max(damage, 0)], enemy_shield)
-    return SpellApplyResult(direct_face_damage=face)
+    dmg = max(damage, 0)
+    face = apply_divine_shield_to_hits([dmg], enemy_shield)
+    return SpellApplyResult(
+        direct_face_damage=face,
+        broke_enemy_hero_shield=bool(enemy_shield and dmg > 0),
+    )
 
 
 def _apply_optimal_single_target_damage(
@@ -585,8 +591,12 @@ def _apply_optimal_single_target_damage(
         ts = deepcopy(taunts)
         fs = deepcopy(fighters)
         direct = 0
+        board_shield = enemy_shield
         if hit_face:
             direct = apply_divine_shield_to_hits([amount], enemy_shield)
+            # 打脸破盾后，场面打脸按无盾计算
+            if enemy_shield and amount > 0:
+                board_shield = False
         else:
             assert minion_idx is not None
             target = ts[minion_idx]
@@ -594,7 +604,7 @@ def _apply_optimal_single_target_damage(
                 target, amount, taunts=ts, fighters=fs, enemy_shield=enemy_shield,
             )
             _remove_dead_taunts(ts)
-        return direct + project_board_face_after_spell(ts, fs, enemy_shield)
+        return direct + project_board_face_after_spell(ts, fs, board_shield)
 
     if _can_spell_hit_enemy_face(taunts):
         face_score = _score(True, None)
@@ -736,7 +746,9 @@ def _apply_lowest_enemy_hits(
         if self_lifesteal and target.get("kind") != "hero":
             res.self_hero_heal += dealt
         if target.get("kind") == "hero":
-            if shield and face == 0 and damage > 0:
+            if enemy_shield and damage > 0:
+                res.broke_enemy_hero_shield = True
+            if shield and damage > 0:
                 shield = False
             elif face > 0 and hero_hp is not None:
                 hero_hp = max(0, hero_hp - face)
@@ -786,7 +798,8 @@ def _apply_random_enemy_hits(
     res = SpellApplyResult()
     roll = _rng_or_default(rng)
     used: set = set(exclude_keys or ())
-    hero = None if exclude_hero else _hero_unit(enemy_shield)
+    shield = enemy_shield
+    hero = None if exclude_hero else _hero_unit(shield)
     for _ in range(hits):
         # 休眠随从不可被随机点名（灭绝圣物等）
         units = [
@@ -794,6 +807,7 @@ def _apply_random_enemy_hits(
             if t.get("health", 0) > 0 and not unit_is_dormant(t)
         ]
         if hero is not None:
+            hero["shield"] = shield
             units.append(hero)
         units = [u for u in units if _target_key(u) not in used]
         if not units:
@@ -802,10 +816,13 @@ def _apply_random_enemy_hits(
         if distinct_targets:
             used.add(_target_key(target))
         heal, face, _ = _apply_damage_to_unit(
-            target, damage, taunts=taunts, fighters=fighters, enemy_shield=enemy_shield,
+            target, damage, taunts=taunts, fighters=fighters, enemy_shield=shield,
         )
         res.opponent_lifesteal_heal += heal
         res.direct_face_damage += face
+        if target.get("kind") == "hero" and shield and damage > 0:
+            shield = False
+            res.broke_enemy_hero_shield = True
     _remove_dead_taunts(taunts)
     return res
 
@@ -1291,9 +1308,13 @@ def _apply_enemy_minions_aoe(
     enemy_shield: bool,
     **_kw,
 ) -> SpellApplyResult:
-    """对所有敌方随从造成固定伤害（不含英雄）。"""
+    """对所有敌方随从造成固定伤害（不含英雄；跳过休眠）。"""
+    from .combat_sim import unit_is_dormant
+
     res = SpellApplyResult()
     for t in list(taunts):
+        if unit_is_dormant(t):
+            continue
         res.opponent_lifesteal_heal += _apply_damage(
             t, damage, taunts=taunts, fighters=fighters,
         )
@@ -1326,16 +1347,22 @@ def _apply_hellfire(
     enemy_shield: bool,
     **_kw,
 ) -> SpellApplyResult:
+    from .combat_sim import unit_is_dormant
+
     dmg = 3 * mult
     res = SpellApplyResult()
     for t in list(taunts):
+        if unit_is_dormant(t):
+            continue
         res.opponent_lifesteal_heal += _apply_damage(t, dmg, taunts=taunts, fighters=fighters)
     _remove_dead_taunts(taunts)
     for f in fighters:
-        if f.get("kind") == "minion":
+        if f.get("kind") == "minion" and not unit_is_dormant(f):
             _apply_damage(f, dmg, taunts=taunts, fighters=fighters)
     res.direct_face_damage = apply_divine_shield_to_hits([dmg], enemy_shield)
     res.self_hero_damage = dmg
+    if enemy_shield and dmg > 0:
+        res.broke_enemy_hero_shield = True
     return res
 
 
@@ -1350,7 +1377,10 @@ def _apply_all_enemies_damage(
     res = _apply_enemy_minions_aoe(
         taunts, fighters, damage, enemy_shield=enemy_shield,
     )
-    res.direct_face_damage += apply_divine_shield_to_hits([damage], enemy_shield)
+    face = apply_divine_shield_to_hits([damage], enemy_shield)
+    res.direct_face_damage += face
+    if enemy_shield and damage > 0:
+        res.broke_enemy_hero_shield = True
     return res
 
 
@@ -1411,15 +1441,19 @@ def _apply_damage_wave_all_minions(
     fighters: List[dict],
     damage: int,
 ) -> SpellApplyResult:
-    """一轮：对所有随从造成固定伤害。"""
+    """一轮：对所有随从造成固定伤害（跳过休眠）。"""
+    from .combat_sim import unit_is_dormant
+
     res = SpellApplyResult()
     for t in list(taunts):
+        if unit_is_dormant(t):
+            continue
         res.opponent_lifesteal_heal += _apply_damage(
             t, damage, taunts=taunts, fighters=fighters,
         )
     _remove_dead_taunts(taunts)
     for f in fighters:
-        if f.get("kind") == "minion" and f.get("health", 0) > 0:
+        if f.get("kind") == "minion" and f.get("health", 0) > 0 and not unit_is_dormant(f):
             _apply_damage(f, damage, taunts=taunts, fighters=fighters)
     return res
 
@@ -1487,15 +1521,23 @@ def _apply_random_split_damage(
     include_friendly_minions：所有随从（苏打火山，不含英雄）。
     include_enemy_hero：额外含敌方英雄（夕阳漫射等「所有敌人」）。
     effect_lifesteal：效果自带吸血，伤害量回复我方英雄（德纳修斯大帝战吼）。
+    休眠随从不可被选中（奥术飞弹等）。
     """
+    from .combat_sim import unit_is_dormant
+
     res = SpellApplyResult()
     roll = _rng_or_default(rng)
     for _ in range(max(total_damage, 0)):
-        units: List[dict] = [t for t in taunts if t.get("health", 0) > 0]
+        units: List[dict] = [
+            t for t in taunts
+            if t.get("health", 0) > 0 and not unit_is_dormant(t)
+        ]
         if include_friendly_minions:
             units.extend(
                 f for f in fighters
-                if f.get("kind") == "minion" and f.get("health", 0) > 0
+                if f.get("kind") == "minion"
+                and f.get("health", 0) > 0
+                and not unit_is_dormant(f)
             )
         if include_enemy_hero:
             units.append(_hero_unit(enemy_shield))
@@ -2018,7 +2060,9 @@ def partition_hand_spells_by_tier(
         if get_combo_def(card.card_id or ""):
             combo.append(item)
             continue
-        if spell_sim_tier(defn) == SpellSimTier.DIRECT_FACE:
+        # 随机直伤（奥术飞弹等）不可进「固定打脸前缀」：单次 RNG 估值会被当成必中，
+        # 且前缀会从 MC 中剥离，导致对面有随从时误报确定斩杀。
+        if spell_sim_tier(defn) == SpellSimTier.DIRECT_FACE and not defn.uses_random:
             direct.append(item)
         else:
             combo.append(item)
@@ -2033,34 +2077,84 @@ def pack_no_taunt_direct_face_spells(
     enemy_shield: bool = False,
     gs: Optional["GameState"] = None,
     player_id: Optional[int] = None,
-) -> Tuple[List[SpellPlayStep], int, int]:
+) -> Tuple[List[SpellPlayStep], int, int, int]:
     """
     无嘲讽：在法力内纳入直伤法术，按打脸伤害/费用贪心选取。
-    返回 (固定前缀步骤, 累计打脸, 已耗法力)。
+    返回 (固定前缀步骤, 计入圣盾后的累计打脸, 已耗法力, 未计圣盾的原始打脸总和)。
+    选牌用无盾伤害，避免「火球被圣盾估成 0」而整张丢弃；圣盾只在合计时扣一次。
+    注能冰冻之触等「打出后回手再打」按同回合可付费次数计入伤害与法力。
     """
-    entries: List[Tuple[float, int, int, "Entity", BoardSpellDef]] = []
+    from .spell_p0_direct import _frozen_touch_infused
+
+    entries: List[Tuple[float, int, int, int, "Entity", BoardSpellDef]] = []
     for card, defn, cost in direct_spells:
         if cost > available_mana:
             continue
+        if defn.uses_random:
+            continue
+        # 用无盾伤害判断是否值得纳入；圣盾由合计时统一处理
         dmg = estimate_no_taunt_direct_face_damage(
-            defn, card, spell_mult=spell_mult, enemy_shield=enemy_shield,
+            defn, card, spell_mult=spell_mult, enemy_shield=False,
             gs=gs, player_id=player_id,
         )
         if dmg <= 0:
             continue
-        entries.append((dmg / max(cost, 1), dmg, cost, card, defn))
-    entries.sort(key=lambda x: (-x[0], -x[1], x[2], x[3].entity_id if x[3] else 0))
+        total_dmg = dmg
+        total_cost = cost
+        # 注能冰冻之触：回手未注能之触，同回合再打一次
+        if _frozen_touch_infused(card):
+            bounce = get_board_spell_def("REV_601")
+            bounce_cost = bounce.base_cost if bounce else 2
+            if cost + bounce_cost <= available_mana:
+                bounce_dmg = estimate_no_taunt_direct_face_damage(
+                    bounce or defn, None, spell_mult=spell_mult, enemy_shield=False,
+                    gs=gs, player_id=player_id,
+                )
+                if bounce_dmg <= 0:
+                    bounce_dmg = dmg
+                total_dmg += bounce_dmg
+                total_cost += bounce_cost
+        entries.append((
+            total_dmg / max(total_cost, 1), total_dmg, total_cost, cost, card, defn,
+        ))
+    entries.sort(key=lambda x: (-x[0], -x[1], x[2], x[4].entity_id if x[4] else 0))
 
     steps: List[SpellPlayStep] = []
-    face = 0
+    raw_hits: List[int] = []
     mana_used = 0
-    for _, dmg, cost, card, defn in entries:
-        if mana_used + cost > available_mana:
+    for _, total_dmg, total_cost, base_cost, card, defn in entries:
+        if mana_used + total_cost > available_mana:
+            # 法力不够整段（含回手）时，仍可只打首发
+            if mana_used + base_cost > available_mana:
+                continue
+            dmg = estimate_no_taunt_direct_face_damage(
+                defn, card, spell_mult=spell_mult, enemy_shield=False,
+                gs=gs, player_id=player_id,
+            )
+            if dmg <= 0:
+                continue
+            steps.append((defn, base_cost, card))
+            raw_hits.append(dmg)
+            mana_used += base_cost
             continue
-        steps.append((defn, cost, card))
-        face += dmg
-        mana_used += cost
-    return steps, face, mana_used
+        steps.append((defn, base_cost, card))
+        # 回手再打时拆成两次命中，圣盾只吸一次
+        if total_cost > base_cost and total_dmg > 0:
+            first = estimate_no_taunt_direct_face_damage(
+                defn, card, spell_mult=spell_mult, enemy_shield=False,
+                gs=gs, player_id=player_id,
+            )
+            second = max(0, total_dmg - first)
+            if first > 0:
+                raw_hits.append(first)
+            if second > 0:
+                raw_hits.append(second)
+        else:
+            raw_hits.append(total_dmg)
+        mana_used += total_cost
+    raw_face = sum(raw_hits)
+    face = apply_divine_shield_to_hits(raw_hits, enemy_shield) if raw_hits else 0
+    return steps, face, mana_used, raw_face
 
 
 def split_sequence_by_sim_tier(
@@ -2112,6 +2206,8 @@ def merge_spell_apply_results(*parts: SpellApplyResult) -> SpellApplyResult:
             total.add_hand_spell_id = part.add_hand_spell_id
             total.add_hand_spell_damage = part.add_hand_spell_damage
         total.add_hand_pending.extend(part.add_hand_pending)
+        if part.broke_enemy_hero_shield:
+            total.broke_enemy_hero_shield = True
     return total
 
 
@@ -2267,13 +2363,17 @@ def enumerate_random_last_spell_orders(
 
 
 def _apply_aoe_all_minions(taunts: List[dict], fighters: List[dict], damage: int) -> int:
-    """对所有随从造成固定伤害（含己方），如麦迪文的胜利。"""
+    """对所有随从造成固定伤害（含己方；跳过休眠），如麦迪文的胜利。"""
+    from .combat_sim import unit_is_dormant
+
     heal = 0
     for t in list(taunts):
+        if unit_is_dormant(t):
+            continue
         heal += _apply_damage(t, damage, taunts=taunts, fighters=fighters)
     _remove_dead_taunts(taunts)
     for f in fighters:
-        if f.get("kind") == "minion":
+        if f.get("kind") == "minion" and not unit_is_dormant(f):
             heal += _apply_damage(f, damage, taunts=taunts, fighters=fighters)
     return heal
 
@@ -2299,7 +2399,11 @@ def _apply_moonwell(
     for f in fighters:
         _heal_unit(f, heal)
     face_hits = apply_divine_shield_to_hits([dmg], enemy_shield)
-    return SpellApplyResult(opponent_lifesteal_heal=opp_heal, direct_face_damage=face_hits)
+    return SpellApplyResult(
+        opponent_lifesteal_heal=opp_heal,
+        direct_face_damage=face_hits,
+        broke_enemy_hero_shield=bool(enemy_shield and dmg > 0),
+    )
 
 
 def _apply_medivh_triumph(taunts: List[dict], fighters: List[dict], *, mult: int, **_kw) -> SpellApplyResult:
@@ -2624,6 +2728,8 @@ def _merge_spell_result(total: SpellApplyResult, res: SpellApplyResult) -> None:
     total.battlecry_face_damage += res.battlecry_face_damage
     total.self_hero_damage += res.self_hero_damage
     total.self_hero_heal += res.self_hero_heal
+    if res.broke_enemy_hero_shield:
+        total.broke_enemy_hero_shield = True
     # drinks_after / add_hand_spell_id 由 apply_spell_sequence 消费，不累计到 total
 
 
@@ -2652,6 +2758,8 @@ def _merge_step_result(
         total.battlecry_face_damage += face
     else:
         total.direct_face_damage += face
+    if res.broke_enemy_hero_shield:
+        total.broke_enemy_hero_shield = True
 
 
 def wicked_stab_card_id_for_max_mana(max_mana: int) -> str:
@@ -3184,6 +3292,8 @@ def _apply_spell_sequence_impl(
                 )
                 res = _coerce_spell_apply_result(res)
                 _merge_step_result(total, res, defn, current_card)
+                if res.broke_enemy_hero_shield:
+                    enemy_shield = False
                 if not friendly_minion_died and _minion_died_in_wave(
                     _friendly_minions(fighters), friendly_before,
                 ):

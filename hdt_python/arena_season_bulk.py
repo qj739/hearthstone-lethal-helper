@@ -162,7 +162,7 @@ _END_TURN_SPECS: Dict[str, EndTurnDef] = {
     "TOY_824": EndTurnDef(
         EtKind.RANDOM_SPLIT_ENEMIES, uses_self_atk=True, uses_random=True, name="黑棘针线师",
     ),
-    "TOY_820": EndTurnDef(EtKind.ATTACK_LOWEST_ENEMY, uses_self_atk=True, name="废弃电子玩偶"),
+    # TOY_820 废弃电子玩偶：回合结束消灭低攻随从，不造成打脸，勿注册为 ATTACK_LOWEST
     "CORE_TTN_866": EndTurnDef(EtKind.HERO_DAMAGE, amount=0, name="神秘恐魔"),
     "YOP_034": EndTurnDef(
         EtKind.RANDOM_ENEMY_MINION, amount=10, uses_random=True, name="窜逃的黑翼龙",
@@ -460,9 +460,11 @@ def _make_spell_apply(spec: _SpellSpec) -> Callable:
     if kind == "all_other_minions":
         return lambda t, f, *, mult, **_kw: _apply_all_minions_aoe_spell(t, f, amt * mult)
     if kind == "random_split_enemies":
+        # 「敌人」含敌方英雄（永世裂痕 / 奥术飞弹类）；不含英雄会漏算打脸且乐观解场误报敌斩
         def _rs(t, f, *, mult, enemy_shield, rng=None, **_kw):
             return _apply_random_split_damage(
                 t, f, amt * mult, enemy_shield=enemy_shield, rng=rng,
+                include_enemy_hero=True,
             )
         return _rs
     if kind == "destroy_enemy":

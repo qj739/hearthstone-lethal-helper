@@ -44,6 +44,34 @@ def _weapon_stats_from_card(
     return atk, max(1, dur)
 
 
+def _hero_attack_slots_left(
+    gs: Optional["GameState"],
+    player_id: Optional[int],
+    *,
+    next_turn_preview: bool = False,
+) -> Optional[int]:
+    """本回合英雄剩余可挥次数；None 表示无局面信息（单测乐观按满挥）。"""
+    if next_turn_preview:
+        return None
+    if gs is None or player_id is None:
+        return None
+    from .board_damage import (
+        attacks_per_turn,
+        attacks_this_turn,
+        is_silenced,
+        _tag,
+    )
+
+    hero = gs.get_hero(player_id)
+    if hero is None:
+        return 0
+    if _tag(hero, "CANT_ATTACK") or _tag(hero, "FROZEN"):
+        return 0
+    max_a = attacks_per_turn(hero, is_silenced(hero))
+    used = attacks_this_turn(hero)
+    return max(max_a - used, 0)
+
+
 def _equip(
     fighters: List[dict],
     atk: int,
@@ -59,14 +87,39 @@ def _equip(
     buff_friendly_atk_after: int = 0,
     buff_friendly_stats_after: tuple[int, int] = (0, 0),
     summon_on_attack: tuple[int, int] | None = None,
+    gs: Optional["GameState"] = None,
+    player_id: Optional[int] = None,
+    next_turn_preview: bool = False,
+    **_kw,
 ) -> None:
-    had_equipped = any(f.get("kind") == "weapon" for f in fighters)
-    remaining_hero_attacks = strip_weapon_fighters(fighters)
+    """装备武器：替换已有武器/空手挥击，且不刷新本回合攻击次数。
+
+    旧逻辑在「场面无武器 fighter」时总是给满挥击，导致英雄已攻击后再打出
+    手牌武器会重复计伤。
+    """
+    # 只要模拟线里已有英雄/武器挥击状态（含 attacks_left=0），装备只继承剩余次数
+    had_swing_tracker = any(f.get("kind") in ("weapon", "hero") for f in fighters)
+    remaining = strip_weapon_fighters(fighters)
+    kept: List[dict] = []
+    for f in fighters:
+        if f.get("kind") == "hero" and int(f.get("attacks_left", 0) or 0) > 0:
+            remaining = max(remaining, int(f.get("attacks_left", 0) or 0))
+            continue
+        kept.append(f)
+    fighters[:] = kept
+
     max_swings = (2 if windfury else 1) * mult
-    if had_equipped:
-        swings = min(remaining_hero_attacks, max_swings, max(1, dur))
+    dur_cap = max(1, dur)
+    if had_swing_tracker:
+        swings = min(remaining, max_swings, dur_cap)
     else:
-        swings = min(max_swings, max(1, dur))
+        slots = _hero_attack_slots_left(
+            gs, player_id, next_turn_preview=next_turn_preview,
+        )
+        if slots is not None:
+            swings = min(slots, max_swings, dur_cap) if slots > 0 else 0
+        else:
+            swings = min(max_swings, dur_cap)
     _add_temp_weapon(
         fighters,
         atk * mult,
@@ -181,166 +234,166 @@ def after_hero_weapon_attack(
 # --- 各武器 ---
 
 def _apply_cata_axe(t, f, *, mult, **_kw):
-    _equip(f, 3, 2, "CATA_580", mult=mult)
+    _equip(f, 3, 2, "CATA_580", mult=mult, **_kw)
     return SpellApplyResult()
 
 
 def _apply_ashbringer_lite(t, f, *, mult, **_kw):
-    _equip(f, 3, 2, "ETC_423", mult=mult)
+    _equip(f, 3, 2, "ETC_423", mult=mult, **_kw)
     return SpellApplyResult()
 
 
 def _apply_shatterbone(t, f, *, mult, **_kw):
-    _equip(f, 2, 2, "RLK_516", mult=mult, face_after_minion_attack=2)
+    _equip(f, 2, 2, "RLK_516", mult=mult, face_after_minion_attack=2, **_kw)
     return SpellApplyResult()
 
 
 def _apply_commanding_claw(t, f, *, mult, **_kw):
-    _equip(f, 2, 2, "CATA_467", mult=mult, buff_friendly_atk_after=2)
+    _equip(f, 2, 2, "CATA_467", mult=mult, buff_friendly_atk_after=2, **_kw)
     return SpellApplyResult()
 
 
 def _apply_defiling_spear(t, f, *, mult, **_kw):
-    _equip(f, 2, 4, "EDR_842", mult=mult, random_other_enemy_atk=True)
+    _equip(f, 2, 4, "EDR_842", mult=mult, random_other_enemy_atk=True, **_kw)
     return SpellApplyResult()
 
 
 def _apply_forward_axe(t, f, *, mult, **_kw):
-    _equip(f, 3, 4, "BAR_844", mult=mult)
+    _equip(f, 3, 4, "BAR_844", mult=mult, **_kw)
     return SpellApplyResult()
 
 
 def _apply_crimson_wings(t, f, *, mult, **_kw):
-    _equip(f, 1, 2, "BT_922", mult=mult)
+    _equip(f, 1, 2, "BT_922", mult=mult, **_kw)
     for _ in range(2):
         _summon_friendly_fighter(f, 1 * mult, 1 * mult, card_id="BT_922")
     return SpellApplyResult()
 
 
 def _apply_ancestral_axe(t, f, *, mult, **_kw):
-    _equip(f, 2, 3, "TLC_478", mult=mult, all_minions_after_attack=1)
+    _equip(f, 2, 3, "TLC_478", mult=mult, all_minions_after_attack=1, **_kw)
     return SpellApplyResult()
 
 
 def _apply_hammer(t, f, *, mult, **_kw):
-    _equip(f, 3, 3, "DMF_705", mult=mult, buff_friendly_stats_after=(1, 1))
+    _equip(f, 3, 3, "DMF_705", mult=mult, buff_friendly_stats_after=(1, 1), **_kw)
     return SpellApplyResult()
 
 
 def _apply_plague_knife(t, f, *, mult, **_kw):
-    _equip(f, 3, 3, "BOT_286", mult=mult)
+    _equip(f, 3, 3, "BOT_286", mult=mult, **_kw)
     return SpellApplyResult()
 
 
 def _apply_kingslayer(t, f, *, mult, **_kw):
-    _equip(f, 3, 2, "TIME_875t1", mult=mult)
+    _equip(f, 3, 2, "TIME_875t1", mult=mult, **_kw)
     return SpellApplyResult()
 
 
 def _apply_atiesh(t, f, *, mult, **_kw):
-    _equip(f, 1, 10, "TIME_890t", mult=mult)
+    _equip(f, 1, 10, "TIME_890t", mult=mult, **_kw)
     return SpellApplyResult()
 
 
 def _apply_muradin_hammer(t, f, *, mult, **_kw):
-    _equip(f, 3, 4, "TIME_209t", mult=mult, windfury=True)
+    _equip(f, 3, 4, "TIME_209t", mult=mult, windfury=True, **_kw)
     return SpellApplyResult()
 
 
 def _apply_swamp_knuckles(t, f, *, mult, **_kw):
-    _equip(f, 4, 5, "BT_102", mult=mult)
+    _equip(f, 4, 5, "BT_102", mult=mult, **_kw)
     return SpellApplyResult()
 
 
 def _apply_pluck(t, f, *, mult, **_kw):
-    _equip(f, 4, 4, "CORE_DAL_720", mult=mult)
+    _equip(f, 4, 4, "CORE_DAL_720", mult=mult, **_kw)
     return SpellApplyResult()
 
 
 def _apply_smith_hammer(t, f, *, mult, **_kw):
-    _equip(f, 3, 4, "TTN_467", mult=mult)
+    _equip(f, 3, 4, "TTN_467", mult=mult, **_kw)
     return SpellApplyResult()
 
 
 def _apply_ref_gloves(t, f, *, mult, **_kw):
-    _equip(f, 3, 4, "TOY_641", mult=mult)
+    _equip(f, 3, 4, "TOY_641", mult=mult, **_kw)
     return SpellApplyResult()
 
 
 def _apply_astro_keyboard(t, f, *, mult, **_kw):
-    _equip(f, 0, 2, "ETC_521", mult=mult)
+    _equip(f, 0, 2, "ETC_521", mult=mult, **_kw)
     return SpellApplyResult()
 
 
 def _apply_cenarius_axe(t, f, *, mult, **_kw):
-    _equip(f, 3, 3, "TIME_020t1", mult=mult, lifesteal=True)
+    _equip(f, 3, 3, "TIME_020t1", mult=mult, lifesteal=True, **_kw)
     return SpellApplyResult()
 
 
 def _apply_shepherds(t, f, *, mult, **_kw):
-    _equip(f, 3, 3, "EDR_416", mult=mult)
+    _equip(f, 3, 3, "EDR_416", mult=mult, **_kw)
     return SpellApplyResult()
 
 
 def _apply_bear_mace(t, f, *, mult, card=None, **_kw):
     atk, dur = _weapon_stats_from_card(card, 4, 4)
-    _equip(f, atk, dur, "EDR_253", mult=mult)
+    _equip(f, atk, dur, "EDR_253", mult=mult, **_kw)
     return SpellApplyResult()
 
 
 def _apply_harpoon(t, f, *, mult, **_kw):
-    _equip(f, 3, 3, "TSC_070", mult=mult)
+    _equip(f, 3, 3, "TSC_070", mult=mult, **_kw)
     return SpellApplyResult()
 
 
 def _apply_inspiration(t, f, *, mult, **_kw):
-    _equip(f, 2, 2, "CATA_472", mult=mult)
+    _equip(f, 2, 2, "CATA_472", mult=mult, **_kw)
     return SpellApplyResult()
 
 
 def _apply_star_blade(t, f, *, mult, **_kw):
-    _equip(f, 3, 3, "GDB_726", mult=mult)
+    _equip(f, 3, 3, "GDB_726", mult=mult, **_kw)
     return SpellApplyResult()
 
 
 def _apply_infused_axe(t, f, *, mult, **_kw):
-    _equip(f, 2, 3, "REV_933", mult=mult)
+    _equip(f, 2, 3, "REV_933", mult=mult, **_kw)
     return SpellApplyResult()
 
 
 def _apply_valiant_sword(t, f, *, mult, **_kw):
-    _equip(f, 3, 5, "MEND_803", mult=mult)
+    _equip(f, 3, 5, "MEND_803", mult=mult, **_kw)
     return SpellApplyResult()
 
 
 def _apply_judgment(t, f, *, mult, **_kw):
-    _equip(f, 5, 7, "YOP_011", mult=mult)
+    _equip(f, 5, 7, "YOP_011", mult=mult, **_kw)
     return SpellApplyResult()
 
 
 def _apply_virtue_brush(t, f, *, mult, **_kw):
-    _equip(f, 2, 4, "TOY_810", mult=mult, lifesteal=True)
+    _equip(f, 2, 4, "TOY_810", mult=mult, lifesteal=True, **_kw)
     return SpellApplyResult()
 
 
 def _apply_hope(t, f, *, mult, **_kw):
-    _equip(f, 4, 6, "RLK_828", mult=mult)
+    _equip(f, 4, 6, "RLK_828", mult=mult, **_kw)
     return SpellApplyResult()
 
 
 def _apply_remote(t, f, *, mult, **_kw):
-    _equip(f, 1, 2, "TOY_358", mult=mult, summon_on_attack=(1, 1))
+    _equip(f, 1, 2, "TOY_358", mult=mult, summon_on_attack=(1, 1), **_kw)
     return SpellApplyResult()
 
 
 def _apply_amplify(t, f, *, mult, **_kw):
-    _equip(f, 3, 3, "REV_509", mult=mult)
+    _equip(f, 3, 3, "REV_509", mult=mult, **_kw)
     return SpellApplyResult()
 
 
 def _apply_hand_of_infinity(t, f, *, mult, **_kw):
     """无穷之手：战吼本回合攻变为无穷；无法攻击英雄。"""
-    _equip(f, INFINITE_ATK, 2, "END_012", mult=1)
+    _equip(f, INFINITE_ATK, 2, "END_012", mult=1, **_kw)
     for i in range(len(f) - 1, -1, -1):
         if f[i].get("kind") == "weapon" and f[i].get("card_id") == "END_012":
             f[i]["can_face"] = False
@@ -413,7 +466,7 @@ def _register_all_weapons() -> None:
             _register_weapon(BoardSpellDef((cid,), cost, zh, fn))
             continue
         def _fallback(t, f, *, mult, _cid=cid, **_kw):
-            _equip(f, 1, 1, _cid, mult=mult)
+            _equip(f, 1, 1, _cid, mult=mult, **_kw)
             return SpellApplyResult()
 
         _register_weapon(BoardSpellDef((cid,), cost or 0, name, _fallback))

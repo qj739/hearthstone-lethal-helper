@@ -124,7 +124,7 @@ def _apply_dk_ghoul_charge(atk: int, health: int):
 def _apply_rogue_dagger(atk: int, dur: int, card_id: str):
     def _fn(t, f: List[dict], *, mult: int, **_kw) -> SpellApplyResult:
         """匕首精通 / 浸毒匕首：装备匕首（替换已有武器）。"""
-        _equip(f, atk, dur, card_id, mult=mult)
+        _equip(f, atk, dur, card_id, mult=mult, **_kw)
         return SpellApplyResult()
 
     return _fn

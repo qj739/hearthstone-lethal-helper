@@ -20,6 +20,7 @@ from .spell_board import (
     _apply_best_minion_damage,
     _apply_damage_to_unit,
     _apply_direct_face,
+    _apply_lowest_enemy_hits,
     _apply_optimal_single_target_damage,
     _apply_random_enemy_hits,
     _apply_random_minion_hits,
@@ -28,6 +29,7 @@ from .spell_board import (
     _living_enemy_taunts,
     _register,
     _remove_dead_taunts,
+    _resolve_opponent_hero_hp,
     _steal_enemy_minion_to_fighter,
     _summon_friendly_fighter,
     player_corpses,
@@ -386,6 +388,96 @@ def _red_card_projected_face(
     return board + et
 
 
+# 红牌休眠后可把「最低血/随机敌人」伤害导向英雄的手牌（含战吼）
+# (kind, per_hit_damage, hits) — 与对应 apply 一致；用于估「休眠挡枪随从」的打脸增益
+_RED_CARD_REDIRECT_HAND = {
+    # 最低血敌人
+    "TOY_642": ("lowest", 3, 1),          # 球霸野猪人 战吼 3
+    "SW_040": ("lowest", 2, 2),           # 邪能弹幕
+    "TLC_227": ("lowest", 2, 3),          # 熔岩涌流
+    "EDR_255": ("lowest", 5, 2),          # 复苏烈焰
+    # 随机所有敌人（含英雄）
+    "EX1_277": ("random", 1, 3),          # 奥术飞弹
+    "CORE_EX1_277": ("random", 1, 3),
+    "VAN_EX1_277": ("random", 1, 3),
+    "JAIL_881": ("random", 1, 5),         # 奥术绊索
+    "JAIL_881t": ("random", 1, 5),
+}
+
+
+def _red_card_face_from_lowest(
+    taunts, *, damage: int, hits: int, enemy_shield: bool, hero_hp: Optional[int],
+) -> int:
+    ts = deepcopy(taunts)
+    res = _apply_lowest_enemy_hits(
+        ts, [], damage, hits=hits, enemy_shield=enemy_shield,
+        opponent_hero_hp=hero_hp,
+    )
+    return int(res.direct_face_damage or 0)
+
+
+def _red_card_expected_random_face(
+    taunts, *, damage: int, hits: int, enemy_shield: bool,
+) -> float:
+    """奥术飞弹类：期望打脸 = hits * dmg * (英雄权重 / 目标数)。"""
+    from .combat_sim import unit_is_dormant
+
+    n_minions = sum(
+        1 for t in taunts
+        if t.get("health", 0) > 0 and not unit_is_dormant(t)
+    )
+    n = n_minions + 1  # +英雄
+    if n <= 0 or damage <= 0 or hits <= 0:
+        return 0.0
+    # 圣盾英雄首段可能被吃，简化按无盾期望
+    return float(hits * damage) / float(n)
+
+
+def _red_card_redirect_face_gain(
+    taunts_before,
+    taunts_after,
+    *,
+    enemy_shield: bool,
+    gs=None,
+    player_id=None,
+) -> float:
+    """
+    红牌把某随从休眠后，手牌里最低血/随机敌人效果相对休眠前能多打多少脸。
+    用于：非嘲讽低血随从挡球霸/奥术飞弹时，应优先红牌掉它。
+    """
+    if gs is None or player_id is None:
+        return 0.0
+    hero_hp = _resolve_opponent_hero_hp(gs, player_id)
+    hand_ids = {
+        (c.card_id or "")
+        for c in gs.get_hand(player_id)
+        if c.card_id
+    }
+    gain = 0.0
+    for cid, (kind, dmg, hits) in _RED_CARD_REDIRECT_HAND.items():
+        if cid not in hand_ids:
+            continue
+        if kind == "lowest":
+            before = _red_card_face_from_lowest(
+                taunts_before, damage=dmg, hits=hits,
+                enemy_shield=enemy_shield, hero_hp=hero_hp,
+            )
+            after = _red_card_face_from_lowest(
+                taunts_after, damage=dmg, hits=hits,
+                enemy_shield=enemy_shield, hero_hp=hero_hp,
+            )
+            gain = max(gain, float(after - before))
+        else:
+            before = _red_card_expected_random_face(
+                taunts_before, damage=dmg, hits=hits, enemy_shield=enemy_shield,
+            )
+            after = _red_card_expected_random_face(
+                taunts_after, damage=dmg, hits=hits, enemy_shield=enemy_shield,
+            )
+            gain = max(gain, after - before)
+    return gain
+
+
 def _mark_red_card_dormant(unit: dict, *, friendly: bool) -> None:
     unit["dormant"] = True
     if friendly:
@@ -484,14 +576,22 @@ def _apply_lunar_ritual(taunts, fighters, *, mult, card=None, enemy_shield=False
 def _apply_red_card(taunts, fighters, *, mult, enemy_shield, gs=None, player_id=None, **_kw,) -> SpellApplyResult:
     """
     红牌：使一个随从休眠 2 回合；休眠随从本回合不计嘲讽、不参与交换。
-    敌方：仅评估嘲讽随从（与其它单体法术一致）；友方例外：已唤醒玛瑟里顿可红牌休眠以触发回合结束 +3。
+
+    敌方：
+    - 嘲讽：解嘲抬场攻（原逻辑）
+    - 非嘲讽：当手牌有球霸/奥术飞弹等「最低血或随机敌人」效果时，休眠挡枪随从
+      可把伤害导向英雄（倒数第二局：红牌镂骨恶犬 → 球霸斩杀）
+    友方例外：已唤醒玛瑟里顿可红牌休眠以触发回合结束 +3。
     """
     best_score = -1.0
     best_kind: Optional[str] = None
     best_eid = None
     best_friendly_stub: Optional[dict] = None
+    base_face = _red_card_projected_face(
+        taunts, fighters, enemy_shield=enemy_shield, gs=gs, player_id=player_id,
+    )
 
-    for m in _living_enemy_taunts(taunts):
+    for m in _living_enemy_board_minions(taunts):
         eid = m.get("entity_id")
         ts = deepcopy(taunts)
         fs = deepcopy(fighters)
@@ -502,9 +602,16 @@ def _apply_red_card(taunts, fighters, *, mult, enemy_shield, gs=None, player_id=
         if target is None:
             continue
         _mark_red_card_dormant(target, friendly=False)
-        score = _red_card_projected_face(
+        face = _red_card_projected_face(
             ts, fs, enemy_shield=enemy_shield, gs=gs, player_id=player_id,
         )
+        redirect = _red_card_redirect_face_gain(
+            taunts, ts, enemy_shield=enemy_shield, gs=gs, player_id=player_id,
+        )
+        score = face + redirect
+        # 非嘲讽且既不抬场攻也不改导向：不必红牌
+        if not m.get("taunt") and score <= base_face and redirect <= 0:
+            continue
         if score > best_score:
             best_score = score
             best_kind = "enemy"

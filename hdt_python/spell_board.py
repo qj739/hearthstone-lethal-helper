@@ -1919,8 +1919,11 @@ _SPELL_SIM_TIER_OVERRIDES: Dict[str, SpellSimTier] = {
     "ETC_717": SpellSimTier.UTILITY,             # 悦耳嘻哈：直伤+武器加攻，须 combo 模拟
     "ETC_717t": SpellSimTier.UTILITY,            # 刺耳嘻哈：直伤+武器加攻，须 combo 模拟
     "TOY_642": SpellSimTier.CLEAR_BOARD,        # 球霸野猪人：最低血敌人，非纯打脸
+    # 红牌须与球霸/弹幕等同层，才能枚举「先红牌休眠挡枪 → 再打最低血/随机」；
+    # 若留在 UTILITY，分层会固定成先直伤/清场后红牌，漏掉镂骨恶犬同血斩杀线
+    "TOY_644": SpellSimTier.CLEAR_BOARD,        # 红牌：解嘲或导向打脸
     "MIS_102": SpellSimTier.CLEAR_AND_FACE,     # 退货政策：触发本局友方亡语
-    "SW_040": SpellSimTier.CLEAR_BOARD,         # 邪能弹幕：最低血敌人，可先打脸再弹幕
+    "SW_040": SpellSimTier.CLEAR_BOARD,         # 邪能弹幕：最低血敌人（可与红牌同层换序）
     "REV_290": SpellSimTier.UTILITY,            # 赎罪教堂 +2/+1
     "CORE_REV_290": SpellSimTier.UTILITY,
     "JAIL_445": SpellSimTier.DIRECT_FACE,       # 骨刃乱舞 3(+3) 随机敌人

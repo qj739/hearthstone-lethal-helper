@@ -124,6 +124,29 @@ def test_atiesh_weapon_in_overlay_with_moonwell():
     print("OK atiesh overlay minion+weapon+moonwell", total, minion_board, weapon_board, spell, w_atk)
 
 
+def test_hand_weapon_after_hero_attacked_no_extra_swing():
+    """英雄本回合已攻击后，打出手牌武器不应再计一次挥击。"""
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.active_player_id = 1
+    gs.in_game = True
+    hero = _hero(gs, 1, 1, atk479=0)
+    hero.tags["RESOURCES"] = 10
+    hero.tags["RESOURCES_USED"] = 0
+    hero.tags["NUM_ATTACKS_THIS_TURN"] = 1
+    hero.tags["EXHAUSTED"] = 1
+    _hero(gs, 2, 2)
+    _hand_weapon(gs, 50, 1, "ETC_423", 3, atk=3, dur=2)
+
+    checker = LethalChecker(gs)
+    total = checker.overlay_board_face_damage()
+    _, minion_board, weapon_board, spell, _ = checker.overlay_board_breakdown()
+    assert weapon_board == 0, (total, weapon_board, checker.overlay_spell_note())
+    assert total == 0, (total, minion_board, weapon_board, spell, checker.overlay_spell_note())
+    print("OK hand weapon after hero attacked = 0", total)
+
+
 def test_equipped_and_hand_weapon_no_double_count():
     """已装备武器 + 手牌武器：只计当前装备或替换后的新武器，不能两把叠加。"""
     gs = GameState()
@@ -384,6 +407,7 @@ if __name__ == "__main__":
     test_atiesh_weapon_strike_when_hero_479_zero()
     test_atiesh_weapon_in_overlay_with_moonwell()
     test_equipped_and_hand_weapon_no_double_count()
+    test_hand_weapon_after_hero_attacked_no_extra_swing()
     test_hand_arcanite_ripper_with_minion_no_taunt()
     test_dk_ghoul_on_board_counts_as_skill_not_minion()
     test_opp_turn_hammer_muncher_board_floor()

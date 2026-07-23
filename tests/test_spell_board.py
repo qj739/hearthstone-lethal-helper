@@ -2565,7 +2565,7 @@ def test_p0_red_card_magtheridon_wake_end_turn():
 
 
 def test_p0_red_card_magtheridon_prefers_face_attack():
-    """已唤醒玛瑟里顿可攻击时，直接 12 打脸优于红牌休眠 +3。"""
+    """已唤醒玛瑟里顿可攻击时：先打脸 12，再红牌休眠可额外回合结束 +3（共 15）。"""
     gs = GameState()
     gs.local_player_id = 1
     gs.opponent_player_id = 2
@@ -2580,7 +2580,11 @@ def test_p0_red_card_magtheridon_prefers_face_attack():
 
     checker = LethalChecker(gs)
     total = checker.overlay_board_face_damage()
-    assert total == 12, f"expected 12 face attack, got {total}"
+    _, board, _, spell, _ = checker.overlay_board_breakdown()
+    # 不可只红牌休眠（+3）而放弃 12 攻；先攻后红牌合法为 15
+    assert board == 12, f"expected Mag face attack 12, got board={board}"
+    assert total >= 12, f"expected at least 12 face, got {total}"
+    assert total in (12, 15), f"expected 12 or attack-then-red 15, got {total}"
     print("OK p0 red card magtheridon prefers attack", total)
 
 
@@ -2647,7 +2651,7 @@ def test_p0_astral_phaser_two_taunts_prefers_small_taunt():
 
 
 def test_p0_red_card_skips_enemy_non_taunt_only():
-    """红牌敌方仅嘲讽：仅 5/5 非嘲讽时不打牌，场攻仍来自随从打脸。"""
+    """无导向手牌时：仅 5/5 非嘲讽不红牌，场攻仍来自随从打脸。"""
     from copy import deepcopy
     from hdt_python.spell_p0_other import _apply_red_card
 
@@ -2691,6 +2695,82 @@ def test_p0_red_card_skips_enemy_non_taunt_only():
     _apply_red_card(ts, fs, mult=1, enemy_shield=False, gs=gs, player_id=1)
     assert not ts[0].get("dormant"), "red card should not target lone enemy non-taunt"
     print("OK p0 red card skips enemy non-taunt only", total)
+
+
+def test_p0_red_card_non_taunt_ball_hog_lethal():
+    """倒数第二局：红牌休眠与英雄同血的镂骨恶犬 → 球霸战吼打脸斩杀。"""
+    from copy import deepcopy
+    from hdt_python.spell_p0_other import _apply_red_card
+
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.in_game = True
+    gs.active_player_id = 1
+    _hero(gs, 1, 1, mana=10, used=0)
+    oh = _hero(gs, 2, 2)
+    oh.health = 3
+    oh.damage = 0
+    # 镂骨恶犬 3/3 非嘲讽：与英雄同血时球霸会优先打随从
+    _minion(gs, 20, 2, 3, 3, card_id="JAM_004")
+    _hand_spell(gs, 30, 1, "TOY_644", 1)
+    _hand_minion(gs, 31, 1, 3, 4, 4, card_id="TOY_642")
+
+    taunts = [
+        {
+            "entity_id": 20,
+            "health": 3,
+            "atk": 3,
+            "taunt": False,
+            "shield": False,
+            "dormant": False,
+            "card_id": "JAM_004",
+        }
+    ]
+    ts = deepcopy(taunts)
+    _apply_red_card(ts, [], mult=1, enemy_shield=False, gs=gs, player_id=1)
+    assert ts[0].get("dormant"), "red card should dormant equal-HP non-taunt for ball hog"
+
+    checker = LethalChecker(gs)
+    total = checker.overlay_board_face_damage()
+    note = checker.overlay_spell_note() or ""
+    _, board, weapon, spell, hp = checker.overlay_board_breakdown()
+    assert total >= 3, f"expected >=3 face from red+ball hog, got {total} note={note}"
+    assert spell >= 3 or "球霸" in note or "红牌" in note, (total, spell, note)
+    _, _, lethal = checker.calculate_lethal_potential()
+    assert lethal, f"expected lethal vs 3hp, face={total} note={note}"
+    print("OK p0 red card non-taunt ball hog lethal", total, note)
+
+
+def test_p0_red_card_non_taunt_arcane_missiles_redirect():
+    """手牌奥术飞弹时：红牌可休眠非嘲讽挡枪随从，抬期望打脸。"""
+    from copy import deepcopy
+    from hdt_python.spell_p0_other import _apply_red_card
+
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.in_game = True
+    _hero(gs, 1, 1, mana=10, used=0)
+    _hero(gs, 2, 2)
+    _minion(gs, 20, 2, 2, 2, card_id="B22")
+    _hand_spell(gs, 30, 1, "TOY_644", 1)
+    _hand_spell(gs, 31, 1, "EX1_277", 1)
+
+    taunts = [
+        {
+            "entity_id": 20,
+            "health": 2,
+            "atk": 2,
+            "taunt": False,
+            "shield": False,
+            "dormant": False,
+        }
+    ]
+    ts = deepcopy(taunts)
+    _apply_red_card(ts, [], mult=1, enemy_shield=False, gs=gs, player_id=1)
+    assert ts[0].get("dormant"), "red card should dormant non-taunt for arcane missiles"
+    print("OK p0 red card non-taunt arcane missiles redirect")
 
 
 def test_p0_living_roots_damage_branch():
@@ -5160,7 +5240,7 @@ def test_p0_hero_power_rogue_dagger_upgraded_face_no_taunt():
 
 
 def test_p0_hero_power_rogue_dagger_after_weapon_swing():
-    """本回合已用武器攻击后，匕首精通仍装备新匕首并可再砍 1 脸。"""
+    """本回合已用武器攻击后，再匕首精通：装备新刀但不刷新攻击次数（不能再砍）。"""
     gs = GameState()
     gs.local_player_id = 1
     gs.opponent_player_id = 2
@@ -5178,9 +5258,9 @@ def test_p0_hero_power_rogue_dagger_after_weapon_swing():
     checker = LethalChecker(gs)
     total = checker.overlay_board_face_damage()
     _, minion_board, weapon_board, spell, hp = checker.overlay_board_breakdown()
-    assert total == 1, (total, minion_board, weapon_board, spell, hp)
-    assert minion_board == 0 and weapon_board == 1 and spell == 0 and hp == 0
-    print("OK rogue dagger after weapon swing", total)
+    assert total == 0, (total, minion_board, weapon_board, spell, hp)
+    assert weapon_board == 0, (total, weapon_board)
+    print("OK rogue dagger after weapon swing no extra face", total)
 
 
 def test_p0_hero_power_rogue_dagger_upgrades_weak_weapon():
@@ -6499,6 +6579,8 @@ if __name__ == "__main__":
     test_p0_red_card_magtheridon_prefers_face_attack()
     test_p0_red_card_two_taunts_face()
     test_p0_red_card_skips_enemy_non_taunt_only()
+    test_p0_red_card_non_taunt_ball_hog_lethal()
+    test_p0_red_card_non_taunt_arcane_missiles_redirect()
     test_p0_living_roots_damage_branch()
     test_p0_velens_chosen_buff_face()
     test_p0_aoe_spells_registered()

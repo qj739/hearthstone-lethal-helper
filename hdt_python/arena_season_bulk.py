@@ -733,7 +733,7 @@ def _register_weapons(ids: List[str], cards: dict, zh: dict) -> None:
 
         def _weapon_fn(t, f, *, mult, card=None, _a=atk, _d=dur, _cid=cid, **_kw):
             wa, wd = _weapon_stats_from_card(card, _a, _d)
-            _equip(f, wa, wd, _cid, mult=mult)
+            _equip(f, wa, wd, _cid, mult=mult, **_kw)
             return sb.SpellApplyResult()
 
         _register_weapon(sb.BoardSpellDef((cid,), cost, name, _weapon_fn))

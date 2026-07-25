@@ -984,6 +984,75 @@ def _apply_abusive_sergeant(
     return SpellApplyResult()
 
 
+def _apply_outfit_tailor(
+    t,
+    f,
+    *,
+    mult,
+    card=None,
+    gs=None,
+    player_id=None,
+    **_kw,
+) -> SpellApplyResult:
+    """服装裁缝 ETC_420：战吼使一个友方随从获得等同于本随从的攻/血（含手牌 BUFF）。"""
+    before_ids = {
+        u.get("entity_id")
+        for u in f
+        if u.get("kind") == "minion" and u.get("health", 0) > 0
+    }
+    if gs is not None and player_id is not None:
+        for m in gs.get_board(player_id):
+            if m.current_health > 0 and m.entity_id is not None:
+                before_ids.add(m.entity_id)
+    atk = hand_minion_attack(card) if card is not None else 2
+    hp = hand_minion_health(card) if card is not None else 2
+    if atk <= 0:
+        atk = 2
+    if hp <= 0:
+        hp = 2
+    taunt = bool(card and int(card.tags.get("TAUNT", 0) or 0))
+    _summon_friendly_fighter(
+        f, atk * mult, hp * max(int(mult), 1),
+        taunt=taunt, card_id="ETC_420",
+    )
+    if not before_ids:
+        return SpellApplyResult()
+    bonus_atk = atk * mult
+    bonus_hp = hp * max(int(mult), 1)
+    # 优先 buff 本回合能打脸的高攻友方（不含刚上场的裁缝）
+    picked = None
+    best_rank = None
+    for i, unit in enumerate(f):
+        if unit.get("kind") != "minion" or unit.get("health", 0) <= 0:
+            continue
+        if unit.get("entity_id") not in before_ids:
+            continue
+        can_face_now = bool(
+            unit.get("can_face") and int(unit.get("attacks_left", 0) or 0) > 0
+        )
+        rank = (
+            1 if can_face_now else 0,
+            int(unit.get("atk", 0) or 0) * max(int(unit.get("attacks_left", 0) or 0), 1),
+            int(unit.get("atk", 0) or 0),
+        )
+        if best_rank is None or rank > best_rank:
+            best_rank = rank
+            picked = ("fighter", i, unit)
+    if picked is None:
+        picked = _pick_best_spell_target_fighter(f, gs=gs, player_id=player_id)
+        if picked is None:
+            return SpellApplyResult()
+        src, key, unit = picked
+        if src == "fighter" and unit.get("entity_id") not in before_ids:
+            return SpellApplyResult()
+        if src == "board" and key not in before_ids:
+            return SpellApplyResult()
+    _apply_buff_to_spell_target(
+        f, picked, bonus_atk=bonus_atk, bonus_health=bonus_hp,
+    )
+    return SpellApplyResult()
+
+
 def _apply_ogrillon(t, f, *, mult, enemy_shield, **_kw) -> SpellApplyResult:
     """屠戮者奥格拉：受伤随从数 → +1/+1，对所有敌人攻击。"""
     n = _count_damaged_minions(t, f)
@@ -1034,10 +1103,15 @@ def _apply_leokk(
 
 def _apply_team_spirit(t, f, *, mult, enemy_shield, **_kw) -> SpellApplyResult:
     """团队之灵：潜行一回合；你的回合英雄 +2 攻（光环，本回合可挥击）。"""
+    from .board_damage import TEAM_SPIRIT_ATK_BONUS, stamp_team_spirit_bonus
+
     _summon_friendly_fighter(
         f, 0, 3 * mult, card_id="TOY_028", aura=True,
     )
-    _add_temp_hero_attack(f, 2 * mult)
+    bonus = TEAM_SPIRIT_ATK_BONUS * mult
+    _add_temp_hero_attack(f, bonus)
+    if f and f[-1].get("kind") == "hero":
+        stamp_team_spirit_bonus(f[-1], bonus)
     return SpellApplyResult()
 
 
@@ -1141,6 +1215,7 @@ def _register_p0_battlecry() -> None:
         (("AV_294",), 2, "怒爪精锐", _apply_sharpclaw, False),
         (("JAIL_998",), 3, "迪菲亚私运者", _apply_defias_smuggler, False),
         (("CORE_CS2_188", "CS2_188"), 1, "叫嚣的中士", _apply_abusive_sergeant, False),
+        (("ETC_420",), 3, "服装裁缝", _apply_outfit_tailor, False),
         (("REV_934",), 6, "屠戮者奥格拉", _apply_ogrillon, False),
         (("GDB_855",), 8, "吞星兽", _apply_star_eater, False),
         (("EDR_464",), 7, "泰兰德", _apply_tyrande, False),

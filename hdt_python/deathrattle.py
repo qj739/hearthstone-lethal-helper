@@ -303,9 +303,12 @@ def resolve_minion_death(
 ) -> DeathrattleResult:
     """伤害致死：先尝试复生，再触发亡语。"""
     from .reborn import try_reborn_revive
+    from .board_damage import revoke_team_spirit_aura
 
     if try_reborn_revive(dead):
         return DeathrattleResult()
+    # 光环随从无亡语也会走这里；须在 early-return 的亡语表之前撤销
+    revoke_team_spirit_aura(dead, fighters)
     return on_minion_died(
         dead, enemy_board, fighters,
         enemy_shield=enemy_shield, rng=rng,

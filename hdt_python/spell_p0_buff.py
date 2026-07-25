@@ -181,9 +181,11 @@ def _apply_verse_riff(taunts, fighters, *, mult, enemy_shield, spell_power=0, **
 
 
 def _apply_libram_of_justice(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw,) -> SpellApplyResult:
-    """正义圣契：敌方随从变 1 血 + 装备 1/4 武器。"""
+    """正义圣契：敌方随从变 1 血 + 装备 1/4 圣光的正义（替换已有武器）。"""
+    from .weapon_p0 import _equip
+
     _set_enemy_minions_health(taunts, 1)
-    _add_temp_hero_attack(fighters, _sd(1, mult=mult, spell_power=spell_power))
+    _equip(fighters, 1, 4, "CS2_091", **_kw)
     return SpellApplyResult()
 
 
@@ -193,10 +195,12 @@ def _apply_dispose_of_evidence(taunts, fighters, *, mult, enemy_shield, spell_po
 
 
 def _apply_muster_for_battle(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw,) -> SpellApplyResult:
-    """作战动员：三个 1/1 + 1/4 武器（新兵当回合失调）。"""
+    """作战动员：三个 1/1 + 装备 1/4 圣光的正义（替换已有武器；新兵当回合失调）。"""
+    from .weapon_p0 import _equip
+
     for _ in range(_sd(3, mult=mult, spell_power=spell_power)):
         _summon_friendly_fighter(fighters, 1, 1)
-    _add_temp_hero_attack(fighters, _sd(1, mult=mult, spell_power=spell_power))
+    _equip(fighters, 1, 4, "CS2_091", **_kw)
     return SpellApplyResult()
 
 
@@ -444,7 +448,7 @@ def _register_p0_buff() -> None:
         (("ETC_363",), 1, "主歌乐句", _apply_verse_riff, False),
         (("BT_011",), 5, "正义圣契", _apply_libram_of_justice, False),
         (("REV_507",), 0, "处理证据", _apply_dispose_of_evidence, False),
-        (("CORE_GVG_061",), 3, "作战动员", _apply_muster_for_battle, False),
+        (("CORE_GVG_061", "GVG_061"), 3, "作战动员", _apply_muster_for_battle, False),
         (("YOP_026",), 5, "树木生长", _apply_arbor_up, False),
         (("CATA_138",), 3, "森林赠礼", _apply_forests_gift, False),
         (("WW_027",), 2, "可靠陪伴", _apply_reliable_companion, False),

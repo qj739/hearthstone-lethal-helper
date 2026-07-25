@@ -1077,6 +1077,11 @@ TEAM_SPIRIT_CARD_IDS = frozenset({"TOY_028"})
 TEAM_SPIRIT_ATK_BONUS = 2
 
 
+def is_team_spirit_card_id(card_id: Optional[str]) -> bool:
+    cid = card_id or ""
+    return cid in TEAM_SPIRIT_CARD_IDS or cid.endswith("TOY_028")
+
+
 def count_board_team_spirit(
     game_state: Optional["GameState"], player_id: Optional[int],
 ) -> int:
@@ -1086,7 +1091,7 @@ def count_board_team_spirit(
     n = 0
     for m in game_state.get_board(player_id):
         cid = m.card_id or ""
-        if cid not in TEAM_SPIRIT_CARD_IDS and not cid.endswith("TOY_028"):
+        if not is_team_spirit_card_id(cid):
             continue
         if int(getattr(m, "current_health", 0) or 0) <= 0:
             continue
@@ -1096,6 +1101,38 @@ def count_board_team_spirit(
             continue
         n += 1
     return n
+
+
+def stamp_team_spirit_bonus(fighter: dict, bonus: int) -> None:
+    """标记英雄/武器挥击中来自团队之灵的攻，便于随从死后撤销。"""
+    amt = max(0, int(bonus or 0))
+    if amt <= 0:
+        return
+    fighter["_team_spirit_bonus"] = int(fighter.get("_team_spirit_bonus", 0) or 0) + amt
+
+
+def revoke_team_spirit_aura(dead: dict, fighters: List[dict]) -> None:
+    """友方团队之灵死亡：从英雄/武器挥击中扣回光环攻。"""
+    if dead.get("kind") == "hero":
+        return
+    if dead.get("silenced"):
+        return
+    # 敌方/偷来的随从死亡不撤我方光环（偷来的若带光环也极少见，按友方 fighters 侧处理）
+    if not is_team_spirit_card_id(str(dead.get("card_id") or "")):
+        return
+    remaining = TEAM_SPIRIT_ATK_BONUS
+    for f in fighters:
+        if remaining <= 0:
+            break
+        if f.get("kind") not in ("hero", "weapon"):
+            continue
+        stamped = int(f.get("_team_spirit_bonus", 0) or 0)
+        if stamped <= 0:
+            continue
+        take = min(stamped, remaining)
+        f["_team_spirit_bonus"] = stamped - take
+        f["atk"] = max(0, int(f.get("atk", 0) or 0) - take)
+        remaining -= take
 
 
 def hero_weapon_strike_damage(

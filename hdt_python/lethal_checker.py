@@ -4128,12 +4128,82 @@ class LethalChecker:
                 "_board_leokk_count": leokk_n,
             })
 
+        # 本回合不能攻击的友方随从仍须进入 fighters，否则全体 AOE
+        # （混搭狂想曲等）打不到 0 攻/疲劳随从，团队之灵光环会假留。
+        present_eids = {
+            f.get("entity_id") for f in fighters if f.get("entity_id") is not None
+        }
+        for card in board_view.cards:
+            ent = card.entity
+            if not ent.is_minion or int(ent.current_health or 0) <= 0:
+                continue
+            eid = ent.entity_id
+            if eid in present_eids:
+                continue
+            if eid in by_id:
+                passive = dict(by_id[eid])
+                passive["attacks_left"] = 0
+                fighters.append(passive)
+            else:
+                from .rush_combat import stamp_fighter_attack_effects
+                from .board_damage import (
+                    entity_spell_immune,
+                    is_dormant,
+                    _minion_summoned_this_turn,
+                    is_potion_madness_stolen,
+                )
+                from .hero_power_board import is_dk_ghoul_board_token
+                from .damaged_spell_power import fighter_spell_power_from_entity
+                from .secret_attack_board import stamp_crusader_aura_on_fighter
+
+                cid = ent.card_id or ""
+                from_hp = (
+                    is_dk_ghoul_board_token(cid)
+                    and _minion_summoned_this_turn(ent)
+                )
+                passive = {
+                    "kind": "minion",
+                    "entity_id": eid,
+                    "card_id": cid,
+                    "atk": card.std_attack,
+                    "health": ent.current_health,
+                    "shield": ent.tags.get("DIVINE_SHIELD", 0) == 1,
+                    "poisonous": self._has_poisonous(ent),
+                    "lifesteal": self._has_lifesteal(ent),
+                    "spell_immune": entity_spell_immune(ent, self.game_state),
+                    "attacks_left": 0,
+                    "can_face": False,
+                    "rush": ent.tags.get("RUSH", 0) == 1,
+                    "dormant": is_dormant(ent, self.game_state),
+                    "silenced": is_silenced(ent),
+                    "from_hero_power": from_hp,
+                    "stolen_turn": is_potion_madness_stolen(
+                        self.game_state, ent,
+                    ),
+                    "dragon": entity_is_dragon(ent),
+                    "beast": entity_is_beast(ent),
+                    "damage": int(ent.damage or 0),
+                    "max_health": int(ent.health or ent.current_health or 0),
+                    "spellpower": fighter_spell_power_from_entity(ent),
+                }
+                stamp_fighter_attack_effects(passive, cid, infused_cleave=False)
+                stamp_crusader_aura_on_fighter(
+                    passive, self.game_state, player_id,
+                )
+                fighters.append(passive)
+            present_eids.add(eid)
+
         hero = self.game_state.get_hero(player_id)
         weapon = self.game_state.get_weapon(player_id)
         active = board_view.active_turn
-        from .board_damage import count_board_team_spirit
+        from .board_damage import (
+            TEAM_SPIRIT_ATK_BONUS,
+            count_board_team_spirit,
+            stamp_team_spirit_bonus,
+        )
 
         spirit_n = count_board_team_spirit(self.game_state, player_id)
+        spirit_bonus = TEAM_SPIRIT_ATK_BONUS * spirit_n
         if hero and weapon and hero_can_attack_with_weapon(
             hero, weapon, active, team_spirit_count=spirit_n,
         ):
@@ -4158,6 +4228,8 @@ class LethalChecker:
                 }
                 from .weapon_p0 import stamp_equipped_weapon_effects
                 stamp_equipped_weapon_effects(w_fighter, weapon.card_id or "")
+                if spirit_bonus > 0:
+                    stamp_team_spirit_bonus(w_fighter, spirit_bonus)
                 fighters.append(w_fighter)
         elif hero and hero_can_attack_with_weapon(
             hero, None, active, team_spirit_count=spirit_n,
@@ -4170,14 +4242,17 @@ class LethalChecker:
                 hero, None, team_spirit_count=spirit_n,
             )
             if hero_attacks > 0 and h_atk > 0:
-                fighters.append({
+                h_fighter = {
                     "kind": "hero",
                     "atk": h_atk,
                     "health": hero.current_health + hero.tags.get("ARMOR", 0),
                     "shield": hero.tags.get("DIVINE_SHIELD", 0) == 1,
                     "attacks_left": hero_attacks,
                     "can_face": hero_weapon_can_face(hero, None),
-                })
+                }
+                if spirit_bonus > 0:
+                    stamp_team_spirit_bonus(h_fighter, spirit_bonus)
+                fighters.append(h_fighter)
 
         return fighters
 

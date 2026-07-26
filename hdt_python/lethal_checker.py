@@ -366,6 +366,73 @@ class LethalChecker:
         del defender_shield  # 打脸分量已由 apply_divine_shield_to_hits 计入
         return max(0, self.get_opponent_effective_hp() - max(0, face_damage))
 
+    @staticmethod
+    def _sequence_lowest_enemy_hit_damage(
+        seq: List, spell_mult: int = 1,
+    ) -> Optional[int]:
+        """单卡「最低血敌人」效果的总伤害；非此类序列返回 None。"""
+        if not seq or len(seq) != 1:
+            return None
+        from .interleave_board import step_card_id
+        from .spell_p0_other import _RED_CARD_REDIRECT_HAND
+
+        defn, _, card = seq[0]
+        cid = step_card_id(defn, card)
+        row = _RED_CARD_REDIRECT_HAND.get(cid)
+        if not row or row[0] != "lowest":
+            base = cid[5:] if cid.startswith("CORE_") else cid
+            row = _RED_CARD_REDIRECT_HAND.get(base)
+        if not row or row[0] != "lowest":
+            return None
+        _, dmg, hits = row
+        return max(0, int(dmg)) * max(0, int(hits)) * max(int(spell_mult), 1)
+
+    def _ensure_lowest_hit_face_by_board_plan(
+        self,
+        seq: List,
+        spell_res: SpellApplyResult,
+        *,
+        board_face: int,
+        enemy_board: List[dict],
+        defender_shield: bool,
+        spell_mult: int = 1,
+    ) -> None:
+        """
+        球霸野猪人等斩杀规划（先攻后法）：
+        1) 场攻 + 战吼伤害是否够斩；
+        2) 不出该牌，场攻打脸能否把敌方英雄压到最低血；
+        3) 可以则把战吼打脸记入结果（防止 merge 漏计）。
+        """
+        from .combat_sim import unit_is_dormant
+        from .spell_board import board_enables_lowest_hit_face_lethal
+
+        hit = self._sequence_lowest_enemy_hit_damage(seq, spell_mult)
+        if hit is None or hit <= 0:
+            return
+        already = (
+            int(spell_res.direct_face_damage or 0)
+            + int(spell_res.battlecry_face_damage or 0)
+        )
+        if already >= hit:
+            return
+        opp0 = self._opponent_hero_hp_after_face_damage(defender_shield, 0)
+        minion_hps = [
+            int(m.get("health", 0) or 0)
+            for m in enemy_board
+            if int(m.get("health", 0) or 0) > 0 and not unit_is_dormant(m)
+        ]
+        if not board_enables_lowest_hit_face_lethal(
+            board_face=board_face,
+            opponent_hp=opp0,
+            enemy_minion_healths=minion_hps,
+            hit_damage=hit,
+        ):
+            return
+        # 先攻后法下该伤害应打脸；记入战吼分项
+        spell_res.battlecry_face_damage = max(
+            int(spell_res.battlecry_face_damage or 0), hit,
+        )
+
     def _opponent_deck_count(self, player_id: Optional[int] = None) -> int:
         """对手牌库剩余张数。"""
         opp = player_id if player_id is not None else self.game_state.opponent_player_id
@@ -1858,11 +1925,15 @@ class LethalChecker:
                         board_face=face_hold,
                         shield=defender_shield,
                     )
+                    opp_hp_hold = self._opponent_hero_hp_after_face_damage(
+                        hold_shield, face_hold,
+                    )
                     spell_res_hold, hp_end_hold, _ = apply_spell_sequence_with_meta(
                         enemy_hold, fs_hold, seq, spell_mult=spell_mult,
                         enemy_shield=hold_shield, rng=rng,
                         gs=self.game_state, player_id=self.game_state.local_player_id,
                         hero_hp=hero_hp, mana_budget=available_mana,
+                        opponent_hero_hp=opp_hp_hold,
                         next_turn_preview=self._hero_power_next_turn(),
                     )
                     hold_shield = _shield_after_spells(spell_res_hold, hold_shield)
@@ -1876,13 +1947,18 @@ class LethalChecker:
                         ))
                         continue
                     self._add_playable_hand_charges(fs_hold, charges, mana_end)
+                    bc_hold = int(spell_res_hold.battlecry_face_damage or 0)
+                    spell_comp_hold = (
+                        int(spell_res_hold.direct_face_damage or 0) + bc_hold
+                    )
                     outcomes.append(self._attach_lifesteal(
                         self._finish_hold_after_attacks(
-                            enemy_hold, fs_hold, spell_res_hold.direct_face_damage, hp_direct,
+                            enemy_hold, fs_hold, spell_comp_hold, hp_direct,
                             hold_shield, rng=rng, fighters_for_et=fs_hold,
                         ),
                         int(spell_res_hold.opponent_lifesteal_heal or 0),
                         enemy_board=enemy_hold,
+                        battlecry_face=bc_hold,
                     ))
 
             taunts = self._living_taunt_states(enemy)
@@ -1918,6 +1994,14 @@ class LethalChecker:
             )
             atk_shield = _shield_after_spells(spell_res, atk_shield)
             spell_res.direct_face_damage += extra_spell_face
+            # 球霸等：按「场攻+N 能否斩 → 场攻能否压英雄至最低血」确保战吼打脸入账
+            self._ensure_lowest_hit_face_by_board_plan(
+                seq, spell_res,
+                board_face=board_face,
+                enemy_board=base_enemy_minions,
+                defender_shield=defender_shield,
+                spell_mult=spell_mult,
+            )
             if self._hero_dead_after_spells(hp_end):
                 return self._face_outcome_hero_dead_after_spells(
                     enemy, spell_res, atk_shield, hp_direct,
@@ -1928,7 +2012,10 @@ class LethalChecker:
             mana_left = self._mana_after_spell_sequence(seq, available_mana)
             self._add_playable_hand_charges(fs, charges, mana_left)
             taunts2 = self._living_taunt_states(enemy)
-            spell_face = spell_res.direct_face_damage
+            # 战吼打脸在 merge 时进 battlecry_face_damage，先攻后法须与 spell_first 一样并入总伤
+            spell_face = int(spell_res.direct_face_damage or 0)
+            battlecry_face = int(spell_res.battlecry_face_damage or 0)
+            spell_component = spell_face + battlecry_face
             spell_ls = int(spell_res.opponent_lifesteal_heal or 0)
             if taunts2:
                 clear_face, clear_ls, can_clear = self._simulate_taunt_clear_from_state(
@@ -1940,14 +2027,15 @@ class LethalChecker:
                 spell_face = self._spell_face_including_stolen(
                     fs, spell_face, atk_shield,
                 )
+                spell_component = spell_face + battlecry_face
                 clear_board_total = 0
                 if can_clear:
                     clear_board_total = (
-                        clear_face + spell_face + hp_direct
+                        clear_face + spell_component + hp_direct
                     )
-                elif spell_face > 0 or hp_direct > 0:
-                    clear_board_total = spell_face + hp_direct
-                board_path_total = board_face + spell_face + hp_direct
+                elif spell_component > 0 or hp_direct > 0:
+                    clear_board_total = spell_component + hp_direct
+                board_path_total = board_face + spell_component + hp_direct
                 if board_face > 0 and board_path_total >= clear_board_total:
                     outcomes.append(self._attach_lifesteal(
                         self._apply_end_turn_face(
@@ -1957,26 +2045,29 @@ class LethalChecker:
                         ),
                         attack_heal + spell_ls,
                         enemy_board=enemy,
+                        battlecry_face=battlecry_face,
                     ))
                 elif not can_clear:
                     line_ls = attack_heal + max(spell_ls, clear_ls)
-                    if spell_face <= 0 and hp_direct <= 0:
+                    if spell_component <= 0 and hp_direct <= 0:
                         outcomes.append(self._attach_lifesteal(
                             self._apply_end_turn_face(
                                 enemy, atk_shield, 0, 0, 0, 0, 0, rng=rng, fighters=fs,
                             ),
                             line_ls,
                             enemy_board=enemy,
+                            battlecry_face=battlecry_face,
                         ))
                     else:
                         outcomes.append(self._attach_lifesteal(
                             self._apply_end_turn_face(
                                 enemy, atk_shield,
-                                spell_face + hp_direct, 0, 0, spell_face, hp_direct,
+                                spell_component + hp_direct, 0, 0, spell_face, hp_direct,
                                 rng=rng, fighters=fs,
                             ),
                             line_ls,
                             enemy_board=enemy,
+                            battlecry_face=battlecry_face,
                         ))
                 else:
                     minion_board = clear_face
@@ -1988,7 +2079,7 @@ class LethalChecker:
                     )
                     total = (
                         minion_board + weapon_board + hero_buff_board
-                        + spell_face + hp_board
+                        + spell_face + battlecry_face + hp_board
                     )
                     outcomes.append(self._attach_lifesteal(
                         self._apply_end_turn_face(
@@ -1999,6 +2090,7 @@ class LethalChecker:
                         ),
                         line_ls,
                         enemy_board=enemy,
+                        battlecry_face=battlecry_face,
                     ))
             else:
                 minion_board, weapon_board, hero_buff_board, remain_hp = (
@@ -2015,7 +2107,7 @@ class LethalChecker:
                     )
                 total = (
                     minion_board + weapon_board + hero_buff_board
-                    + spell_face + hp_board
+                    + spell_face + battlecry_face + hp_board
                 )
                 outcomes.append(self._attach_lifesteal(
                     self._apply_end_turn_face(
@@ -2026,6 +2118,7 @@ class LethalChecker:
                     ),
                     attack_heal + spell_ls,
                     enemy_board=enemy,
+                    battlecry_face=battlecry_face,
                 ))
             return max(outcomes, key=lambda x: x[0])
 
@@ -3736,7 +3829,10 @@ class LethalChecker:
             mana_left = self._mana_after_spell_sequence(seq, available_mana)
             self._add_playable_hand_charges(fs, charges, mana_left)
 
-            spell_face = spell_res.direct_face_damage
+            spell_face = (
+                int(spell_res.direct_face_damage or 0)
+                + int(spell_res.battlecry_face_damage or 0)
+            )
             taunts2 = self._living_taunt_states(enemy)
             if faceless_only:
                 if taunts2:
@@ -4062,6 +4158,7 @@ class LethalChecker:
                     is_potion_madness_stolen,
                 )
                 from .hero_power_board import is_dk_ghoul_board_token
+                from .spell_board import entity_is_paladin
 
                 cid = card.entity.card_id or ""
                 from_hp = (
@@ -4091,6 +4188,9 @@ class LethalChecker:
                 }
                 fighter["dragon"] = entity_is_dragon(card.entity)
                 fighter["beast"] = entity_is_beast(card.entity)
+                if entity_is_paladin(card.entity):
+                    fighter["paladin"] = True
+                    fighter["card_class"] = "PALADIN"
                 from .damaged_spell_power import fighter_spell_power_from_entity
 
                 fighter["damage"] = int(card.entity.damage or 0)
@@ -4155,6 +4255,7 @@ class LethalChecker:
                 from .hero_power_board import is_dk_ghoul_board_token
                 from .damaged_spell_power import fighter_spell_power_from_entity
                 from .secret_attack_board import stamp_crusader_aura_on_fighter
+                from .spell_board import entity_is_paladin
 
                 cid = ent.card_id or ""
                 from_hp = (
@@ -4186,6 +4287,9 @@ class LethalChecker:
                     "max_health": int(ent.health or ent.current_health or 0),
                     "spellpower": fighter_spell_power_from_entity(ent),
                 }
+                if entity_is_paladin(ent):
+                    passive["paladin"] = True
+                    passive["card_class"] = "PALADIN"
                 stamp_fighter_attack_effects(passive, cid, infused_cleave=False)
                 stamp_crusader_aura_on_fighter(
                     passive, self.game_state, player_id,
@@ -4260,19 +4364,24 @@ class LethalChecker:
     def _fighters_face_hits(fighters: List[dict]) -> List[int]:
         from .combat_sim import _friendly_taunt_blocks_face, _normalize_fighters
         from .rush_combat import simulate_minion_face_hits
+        from .weapon_p0 import apply_after_attack_friendly_buffs
 
         normed = _normalize_fighters(fighters)
         if _friendly_taunt_blocks_face(normed):
             return []
         hits: List[int] = []
+        # 拷贝可打脸随从：武器挥击后的友方 buff 只影响本次打脸估算
         minion_fs: List[dict] = []
         for f in normed:
+            if f.get("kind") != "minion":
+                continue
+            if f.get("health", 0) <= 0 or f.get("attacks_left", 0) <= 0:
+                continue
+            if not f.get("can_face", True):
+                continue
+            minion_fs.append(dict(f))
+        for f in normed:
             if f.get("kind") == "minion":
-                if f.get("health", 0) <= 0 or f.get("attacks_left", 0) <= 0:
-                    continue
-                if not f.get("can_face", True):
-                    continue
-                minion_fs.append(f)
                 continue
             if not f.get("can_face", True):
                 continue
@@ -4285,6 +4394,8 @@ class LethalChecker:
                 n = attacks_left
             for _ in range(n):
                 hits.append(f["atk"])
+                if f.get("kind") == "weapon":
+                    apply_after_attack_friendly_buffs(f, minion_fs)
         hits.extend(simulate_minion_face_hits(minion_fs))
         return hits
 

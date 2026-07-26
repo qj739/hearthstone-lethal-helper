@@ -1330,36 +1330,14 @@ class PlayerBoardView:
         """无嘲讽时每次打脸攻击的伤害列表（用于圣盾模拟）"""
         from .secret_attack_board import player_has_crusader_aura, stamp_crusader_aura_on_fighter
         from .rush_combat import stamp_fighter_attack_effects, simulate_minion_face_hits
-        from .spell_board import entity_is_beast
+        from .spell_board import entity_is_beast, entity_is_paladin
+        from .weapon_p0 import apply_after_attack_friendly_buffs, stamp_equipped_weapon_effects
 
         hits: List[int] = []
         secret_active = False
         if self.game_state is not None and self.player_id is not None:
             secret_active = player_has_crusader_aura(self.game_state, self.player_id)
-        if self.hero and self.hero.include:
-            hero_entity = self.hero.entity
-            weapon_entity = self.hero.weapon.entity if self.hero.weapon else None
-            spirit_n = count_board_team_spirit(self.game_state, self.player_id)
-            if hero_weapon_can_face(hero_entity, weapon_entity):
-                if weapon_entity and _std_attack(weapon_entity) > 0:
-                    w_atk = hero_weapon_strike_damage(
-                        hero_entity, weapon_entity, team_spirit_count=spirit_n,
-                    )
-                    if w_atk != INFINITE_ATK:
-                        silenced = is_silenced(hero_entity)
-                        per_turn = attacks_per_turn(hero_entity, silenced)
-                        used = (
-                            effective_attacks_this_turn(
-                                hero_entity, active_turn=self.active_turn,
-                            )
-                            if self.active_turn else 0
-                        )
-                        remaining = max(per_turn - used, 0)
-                        dur = _weapon_health(weapon_entity)
-                        for _ in range(min(remaining, dur)):
-                            hits.append(w_atk)
-                elif self.hero.attack > 0:
-                    hits.append(self.hero.attack)
+
         minion_fighters: List[dict] = []
         for card in self.cards:
             if not card.entity.is_minion:
@@ -1388,10 +1366,52 @@ class PlayerBoardView:
                 "can_face": card.can_attack_hero,
                 "beast": entity_is_beast(card.entity),
             }
+            if entity_is_paladin(card.entity):
+                fighter["paladin"] = True
+                fighter["card_class"] = "PALADIN"
             stamp_fighter_attack_effects(fighter, cid)
             if self.game_state is not None and self.player_id is not None:
                 stamp_crusader_aura_on_fighter(fighter, self.game_state, self.player_id)
             minion_fighters.append(fighter)
+
+        if self.hero and self.hero.include:
+            hero_entity = self.hero.entity
+            weapon_entity = self.hero.weapon.entity if self.hero.weapon else None
+            spirit_n = count_board_team_spirit(self.game_state, self.player_id)
+            if hero_weapon_can_face(hero_entity, weapon_entity):
+                if weapon_entity and _std_attack(weapon_entity) > 0:
+                    w_atk = hero_weapon_strike_damage(
+                        hero_entity, weapon_entity, team_spirit_count=spirit_n,
+                    )
+                    if w_atk != INFINITE_ATK:
+                        silenced = is_silenced(hero_entity)
+                        per_turn = attacks_per_turn(hero_entity, silenced)
+                        used = (
+                            effective_attacks_this_turn(
+                                hero_entity, active_turn=self.active_turn,
+                            )
+                            if self.active_turn else 0
+                        )
+                        remaining = max(per_turn - used, 0)
+                        dur = _weapon_health(weapon_entity)
+                        w_fighter = {
+                            "kind": "weapon",
+                            "card_id": weapon_entity.card_id or "",
+                            "atk": w_atk,
+                            "attacks_left": remaining,
+                            "durability": dur,
+                            "can_face": True,
+                        }
+                        stamp_equipped_weapon_effects(
+                            w_fighter, weapon_entity.card_id or "",
+                        )
+                        for _ in range(min(remaining, dur)):
+                            hits.append(w_atk)
+                            apply_after_attack_friendly_buffs(
+                                w_fighter, minion_fighters,
+                            )
+                elif self.hero.attack > 0:
+                    hits.append(self.hero.attack)
         hits.extend(simulate_minion_face_hits(minion_fighters, secret_active=secret_active))
         return hits
 

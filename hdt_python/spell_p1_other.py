@@ -157,6 +157,16 @@ def _apply_stellar_balance(taunts, fighters, *, mult, enemy_shield, spell_power=
     return res
 
 
+def _apply_contraband_wands(
+    taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw,
+) -> SpellApplyResult:
+    """私藏魔杖 JAIL_312：获取 3 张奥术飞弹（可在同序列中继续打出）。"""
+    n = 3 * max(int(mult), 1)
+    return SpellApplyResult(
+        add_hand_pending=[("EX1_277", 1, 0) for _ in range(n)],
+    )
+
+
 def _apply_cursed_souvenir(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw) -> SpellApplyResult:
     """咒怨纪念品：+3/+3（回合开始自伤 v1 不计）。"""
     _apply_optimal_friendly_buff(
@@ -182,6 +192,7 @@ def _register_p1_other() -> None:
         (("ETC_082",), 6, "绝望哀歌", _apply_dirge_of_despair, False),
         (("SCH_138",), 5, "威能祝福", _apply_blessing_of_authority, False),
         (("EDR_874",), 2, "星体平衡", _apply_stellar_balance, False),
+        (("JAIL_312",), 2, "私藏魔杖", _apply_contraband_wands, False),
         (("VAC_944",), 2, "咒怨纪念品", _apply_cursed_souvenir, False),
         (("SW_088",), 4, "恶魔来袭", _apply_demonic_assault, False),
     ]

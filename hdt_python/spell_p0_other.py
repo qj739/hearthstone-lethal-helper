@@ -800,6 +800,14 @@ def _apply_malfurions_gift(taunts, fighters, *, mult, enemy_shield, spell_power=
     return SpellApplyResult()
 
 
+def _apply_mass_production(
+    taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw,
+) -> SpellApplyResult:
+    """批量生产 MIS_707：抽 2 + 对你的英雄造成 3 点伤害（非打脸）。"""
+    dmg = _sd(3, mult=mult, spell_power=spell_power)
+    return SpellApplyResult(self_hero_damage=dmg)
+
+
 def _register_p0_other() -> None:
     specs = [
         (("GIFT_10", "CORE_GIFT_10"), 1, "玛法里奥的礼物", _apply_malfurions_gift, False),
@@ -826,6 +834,7 @@ def _register_p0_other() -> None:
         (("CFM_603",), 1, "疯狂药水", _apply_potion_of_madness, False),
         (("TOY_644",), 1, "红牌", _apply_red_card, False),
         (("MIS_102",), 3, "退货政策", _apply_return_policy, False),
+        (("MIS_707",), 1, "批量生产", _apply_mass_production, False),
         (("EDR_461",), 5, "新月仪式", _apply_lunar_ritual, False),
         (("EDR_461t",), 5, "满月仪式", _apply_lunar_ritual, False),
     ]

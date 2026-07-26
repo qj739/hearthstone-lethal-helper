@@ -176,6 +176,26 @@ def _buff_friendly_minion(
             f["can_face"] = False
 
 
+def _buff_all_friendly_paladin_minions(
+    fighters: List[dict],
+    *,
+    atk_bonus: int = 0,
+    hp_bonus: int = 0,
+) -> None:
+    """求真之锤：英雄攻击后，全体友方圣骑士随从 +N/+N。"""
+    if atk_bonus == 0 and hp_bonus == 0:
+        return
+    from .spell_board import unit_is_paladin
+
+    for f in fighters:
+        if f.get("kind") != "minion" or f.get("health", 0) <= 0:
+            continue
+        if not unit_is_paladin(f):
+            continue
+        f["atk"] = f.get("atk", 0) + atk_bonus
+        f["health"] = f.get("health", 0) + hp_bonus
+
+
 def _apply_icy_touch(taunts, fighters, *, mult, enemy_shield, **_kw) -> SpellApplyResult:
     """极寒之击：8 直伤（冻结 v1 不计入场攻）。"""
     return _apply_direct_face(8 * mult, enemy_shield)

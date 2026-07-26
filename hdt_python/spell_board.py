@@ -123,6 +123,9 @@ _KNOWN_BEAST_CARD_IDS = frozenset({
     "JAIL_877t",
 })
 
+# CardClass.PALADIN；日志里可能是字符串或枚举数值
+_PALADIN_CLASS_VALUES = frozenset({"PALADIN", 5, "5"})
+
 
 def entity_is_dragon(entity) -> bool:
     """随从实体是否为龙（CARDRACE / DRAGON 标签）。"""
@@ -188,6 +191,46 @@ def unit_is_dragon(unit: dict) -> bool:
         return True
     race = unit.get("cardrace") or _dragon_race_value(tags)
     return race in ("DRAGON", 24)
+
+
+@lru_cache(maxsize=4096)
+def card_id_is_paladin(card_id: str) -> bool:
+    """cards.json 牌面职业是否为圣骑士。"""
+    if not card_id:
+        return False
+    cards_path = resource_path("json", "cards.json")
+    if not cards_path.is_file():
+        return False
+    try:
+        with open(cards_path, encoding="utf-8") as f:
+            for card in json.load(f):
+                if card.get("id") == card_id:
+                    return card.get("cardClass") == "PALADIN"
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return False
+    return False
+
+
+def entity_is_paladin(entity) -> bool:
+    """随从实体是否为圣骑士职业牌。"""
+    if entity is None:
+        return False
+    tags = getattr(entity, "tags", {}) or {}
+    cls = tags.get("CLASS") or tags.get("CARDCLASS")
+    if cls in _PALADIN_CLASS_VALUES:
+        return True
+    return card_id_is_paladin(getattr(entity, "card_id", None) or "")
+
+
+def unit_is_paladin(unit: dict) -> bool:
+    """模拟场面 dict 是否为圣骑士随从。"""
+    if unit.get("paladin") or unit.get("card_class") == "PALADIN":
+        return True
+    tags = unit.get("tags") or {}
+    cls = tags.get("CLASS") or tags.get("CARDCLASS") or unit.get("card_class")
+    if cls in _PALADIN_CLASS_VALUES:
+        return True
+    return card_id_is_paladin(unit.get("card_id") or "")
 
 
 def _apply_damage(
@@ -653,7 +696,47 @@ def _pick_lowest_unit(units: List[dict]) -> Optional[dict]:
     ]
     if not alive:
         return None
-    return min(alive, key=lambda u: _effective_health(u))
+    # 并列最低血时优先英雄（与回合结束「攻击最低血敌人」、斩杀先攻压血一致）
+    return min(
+        alive,
+        key=lambda u: (
+            _effective_health(u),
+            0 if u.get("kind") == "hero" else 1,
+        ),
+    )
+
+
+def board_enables_lowest_hit_face_lethal(
+    *,
+    board_face: int,
+    opponent_hp: int,
+    enemy_minion_healths: List[int],
+    hit_damage: int,
+) -> bool:
+    """
+    球霸等「对生命值最低的敌人造成伤害」斩杀判定（先攻后法）：
+
+    1) 先看：场攻 + 该伤害 是否足以斩杀；
+    2) 若可以：再看出不打出该牌、仅用场攻打脸，能否把敌方英雄压到
+       （并列也算）生命值最低；
+    3) 两者皆可 ⇒ 可用该牌打脸斩杀。
+    """
+    board = max(0, int(board_face or 0))
+    opp = max(0, int(opponent_hp or 0))
+    hit = max(0, int(hit_damage or 0))
+    if opp <= 0 or hit <= 0:
+        return False
+    # 1) 加上这 N 点能不能杀
+    if board + hit < opp:
+        return False
+    # 2) 不出该牌：场攻全打脸后，英雄是否成为最低血敌人
+    living = [max(0, int(h)) for h in enemy_minion_healths if int(h or 0) > 0]
+    hero_after = opp - board
+    if hero_after <= 0:
+        return True
+    if not living:
+        return True
+    return hero_after <= min(living)
 
 
 def _living_enemy_units(
@@ -1001,6 +1084,9 @@ def _summon_friendly_fighter(
         "from_hero_power": from_hero_power,
         "aura": aura,
     }
+    if card_id_is_paladin(card_id):
+        unit["paladin"] = True
+        unit["card_class"] = "PALADIN"
     fighters.append(unit)
     apply_leokk_aura_on_minion_added(fighters, unit)
 
@@ -1939,6 +2025,8 @@ _SPELL_SIM_TIER_OVERRIDES: Dict[str, SpellSimTier] = {
     "JAIL_326": SpellSimTier.UTILITY,           # 审判：复制友方属性到双方其他随从
     "ETC_082": SpellSimTier.UTILITY,            # 绝望哀歌：灵活解场+召唤，非纯打脸前缀
     "EDR_874": SpellSimTier.UTILITY,            # 星体平衡：生成月火+星火链，须完整 combo
+    "MIS_707": SpellSimTier.UTILITY,            # 批量生产：自伤+抽牌，非打脸
+    "JAIL_312": SpellSimTier.UTILITY,           # 私藏魔杖：生成奥术飞弹，须 combo 模拟
 }
 
 

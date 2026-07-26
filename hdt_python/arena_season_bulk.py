@@ -59,6 +59,8 @@ _SPELL_OVERRIDES: Dict[str, _SpellSpec] = {
     "CORE_BOT_222": _SpellSpec("minion_direct", 4, note="同时打英雄v1仅随从"),
     "TOY_640": _SpellSpec("minion_direct", 5, note="邻接溢出v1单目标"),
     "MIS_027": _SpellSpec("minion_direct", 2, note="多米诺v1首目标"),
+    # 批量生产：抽牌 + 对己方英雄 3 伤（绝非打脸）
+    "MIS_707": _SpellSpec("self_damage", 3, note="对己方英雄3伤"),
     "CORE_RLK_035": _SpellSpec("all_minions_aoe", 1, note="残骸递增v1单次"),
     "END_023": _SpellSpec("destroy_damaged_enemy", note="冻结邻接v1消灭受伤"),
     "END_028": _SpellSpec("destroy_atk_le", 4),
@@ -304,6 +306,11 @@ def _classify_spell(text: str) -> _SpellSpec:
     if "give your hero" in t and "attack" in t:
         m = re.search(r"\+(\d+) attack", t)
         return _SpellSpec("hero_attack", int(m.group(1)) if m else 1)
+    # 对你的英雄造成伤害（批量生产等）≠ 打脸
+    if dmg and "deal" in t and (
+        "to your hero" in t or "to yourself" in t
+    ):
+        return _SpellSpec("self_damage", dmg, note="自伤")
     if "deal" in t and dmg:
         return _SpellSpec("face_direct", dmg)
     return _SpellSpec("noop", note="未分类")
@@ -443,6 +450,14 @@ def _make_spell_apply(spec: _SpellSpec) -> Callable:
     if kind == "face_direct":
         from .spell_p0_minion import _optimal_damage_fn
         return _optimal_damage_fn(amt)
+    if kind == "self_damage":
+        _sd = sb.scaled_spell_damage
+
+        def _self_dmg(*_a, mult=1, spell_power=0, **_kw):
+            dmg = _sd(amt, mult=mult, spell_power=spell_power)
+            return SpellApplyResult(self_hero_damage=dmg)
+
+        return _self_dmg
     if kind == "minion_direct":
         from .spell_p0_minion import _minion_damage_fn
         return _minion_damage_fn(amt)

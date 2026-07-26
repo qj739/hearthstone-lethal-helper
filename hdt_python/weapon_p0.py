@@ -6,7 +6,12 @@ import random
 from typing import List, Optional, TYPE_CHECKING
 
 from .board_damage import INFINITE_ATK
-from .eudora_loot import _add_temp_weapon, _buff_friendly_minion, strip_weapon_fighters
+from .eudora_loot import (
+    _add_temp_weapon,
+    _buff_all_friendly_paladin_minions,
+    _buff_friendly_minion,
+    strip_weapon_fighters,
+)
 from .spell_board import (
     BoardSpellDef,
     SpellApplyResult,
@@ -86,6 +91,7 @@ def _equip(
     random_other_enemy_atk: bool = False,
     buff_friendly_atk_after: int = 0,
     buff_friendly_stats_after: tuple[int, int] = (0, 0),
+    buff_all_paladin_stats_after: tuple[int, int] = (0, 0),
     summon_on_attack: tuple[int, int] | None = None,
     gs: Optional["GameState"] = None,
     player_id: Optional[int] = None,
@@ -141,6 +147,9 @@ def _equip(
     if buff_friendly_stats_after != (0, 0):
         ba, bh = buff_friendly_stats_after
         w["buff_friendly_stats_after"] = (ba * mult, bh * mult)
+    if buff_all_paladin_stats_after != (0, 0):
+        ba, bh = buff_all_paladin_stats_after
+        w["buff_all_paladin_stats_after"] = (ba * mult, bh * mult)
     if summon_on_attack:
         sa, sh = summon_on_attack
         w["summon_on_attack"] = (sa * mult, sh * mult)
@@ -153,6 +162,7 @@ WEAPON_AFTER_ATTACK_META: dict[str, dict] = {
     "EDR_842": {"random_other_enemy_atk": True},
     "TLC_478": {"all_minions_after_attack": 1},
     "DMF_705": {"buff_friendly_stats_after": (1, 1)},
+    "JAIL_329": {"buff_all_paladin_stats_after": (2, 2)},
     "TOY_358": {"summon_on_attack": (1, 1)},
 }
 
@@ -173,6 +183,25 @@ def stamp_equipped_weapon_effects(fighter: dict, card_id: str) -> None:
         fighter[key] = val
 
 
+def apply_after_attack_friendly_buffs(weapon: dict, fighters: List[dict]) -> None:
+    """英雄武器攻击后的友方增益（敲狼锤单体 / 求真之锤全体圣骑）。"""
+    batk = int(weapon.get("buff_friendly_atk_after", 0) or 0)
+    if batk > 0:
+        _buff_friendly_minion(fighters, atk_bonus=batk)
+
+    bstats = weapon.get("buff_friendly_stats_after")
+    if bstats:
+        ba, bh = bstats
+        _buff_friendly_minion(fighters, atk_bonus=int(ba), hp_bonus=int(bh))
+
+    all_pal = weapon.get("buff_all_paladin_stats_after")
+    if all_pal:
+        ba, bh = all_pal
+        _buff_all_friendly_paladin_minions(
+            fighters, atk_bonus=int(ba), hp_bonus=int(bh),
+        )
+
+
 def after_hero_weapon_attack(
     weapon: dict,
     target: dict,
@@ -182,7 +211,7 @@ def after_hero_weapon_attack(
     enemy_shield: bool,
     rng: Optional[random.Random] = None,
 ) -> int:
-    """英雄武器攻击后触发（碎骨手斧、远祖之斧等）。"""
+    """英雄武器攻击后触发（碎骨手斧、远祖之斧、求真之锤等）。"""
     if weapon.get("kind") != "weapon" or weapon.get("health", 0) <= 0:
         return 0
     heal = 0
@@ -214,14 +243,7 @@ def after_hero_weapon_attack(
             )
             heal += res.opponent_lifesteal_heal
 
-    batk = int(weapon.get("buff_friendly_atk_after", 0) or 0)
-    if batk > 0:
-        _buff_friendly_minion(fighters, atk_bonus=batk)
-
-    bstats = weapon.get("buff_friendly_stats_after")
-    if bstats:
-        ba, bh = bstats
-        _buff_friendly_minion(fighters, atk_bonus=int(ba), hp_bonus=int(bh))
+    apply_after_attack_friendly_buffs(weapon, fighters)
 
     summon = weapon.get("summon_on_attack")
     if summon:
@@ -277,6 +299,15 @@ def _apply_ancestral_axe(t, f, *, mult, **_kw):
 
 def _apply_hammer(t, f, *, mult, **_kw):
     _equip(f, 3, 3, "DMF_705", mult=mult, buff_friendly_stats_after=(1, 1), **_kw)
+    return SpellApplyResult()
+
+
+def _apply_truth_seeker(t, f, *, mult, **_kw):
+    """求真之锤：英雄攻击后，友方圣骑士随从 +2/+2。"""
+    _equip(
+        f, 3, 3, "JAIL_329", mult=mult,
+        buff_all_paladin_stats_after=(2, 2), **_kw,
+    )
     return SpellApplyResult()
 
 
@@ -412,6 +443,7 @@ _WEAPON_OVERRIDES = {
     "BT_922": ("棕红之翼", _apply_crimson_wings),
     "TLC_478": ("远祖之斧", _apply_ancestral_axe),
     "DMF_705": ("敲狼锤", _apply_hammer),
+    "JAIL_329": ("求真之锤", _apply_truth_seeker),
     "BOT_286": ("死金匕首", _apply_plague_knife),
     "TIME_875t1": ("弑君者", _apply_kingslayer),
     "TIME_890t": ("圣杖埃提耶什", _apply_atiesh),
@@ -470,6 +502,18 @@ def _register_all_weapons() -> None:
             return SpellApplyResult()
 
         _register_weapon(BoardSpellDef((cid,), cost or 0, name, _fallback))
+
+    # cards.json / 工作表未收录的覆盖仍需注册（如求真之锤 JAIL_329）
+    _override_costs = {
+        "JAIL_329": 7,
+        "END_012": 5,
+    }
+    for cid, (zh, fn) in _WEAPON_OVERRIDES.items():
+        if cid in seen:
+            continue
+        _register_weapon(
+            BoardSpellDef((cid,), _override_costs.get(cid, 0), zh, fn),
+        )
 
 
 _register_all_weapons()

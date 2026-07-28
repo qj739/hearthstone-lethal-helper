@@ -173,6 +173,24 @@ def _apply_fireball(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_k
     )
 
 
+def _apply_dark_embrace(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw) -> SpellApplyResult:
+    """黑暗之拥 JAIL_941t：造成 4 点伤害（可打脸；埃提耶什翻倍）。"""
+    return _apply_optimal_single_target_damage(
+        taunts, fighters, _sd(4, mult=mult, spell_power=spell_power),
+        enemy_shield=enemy_shield,
+    )
+
+
+def _apply_holy_embrace(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw) -> SpellApplyResult:
+    """神圣之拥 JAIL_941：恢复 4 点生命；获取黑暗之拥（可同序列打出）。"""
+    del taunts, fighters, enemy_shield, spell_power
+    heal = 4 * max(int(mult), 1)  # 埃提耶什翻倍治疗；法强不加治疗
+    return SpellApplyResult(
+        self_hero_heal=heal,
+        add_hand_pending=[("JAIL_941t", 2, 0)],
+    )
+
+
 def _apply_swipe(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw) -> SpellApplyResult:
     """横扫：主目标 4 伤，其余敌人各 1 伤（无嘲讽打脸 4）。"""
     from copy import deepcopy
@@ -501,6 +519,8 @@ def _register_p0_direct() -> None:
         (("TIME_611",), 2, "时间停滞", _apply_timestop, False),
         (("DS1_185", "CORE_DS1_185"), 1, "奥术射击", _apply_arcane_shot, False),
         (("CS2_029", "CORE_CS2_029"), 4, "火球术", _apply_fireball, False),
+        (("JAIL_941t",), 2, "黑暗之拥", _apply_dark_embrace, False),
+        (("JAIL_941",), 2, "神圣之拥", _apply_holy_embrace, False),
         (("CS2_012", "CORE_CS2_012"), 3, "横扫", _apply_swipe, False),
         (("FIR_909",), 2, "爆裂射击", _apply_bursting_shot, True),
         (("FIR_910",), 3, "灼烧之风", _apply_scorching_winds, False),

@@ -2027,6 +2027,8 @@ _SPELL_SIM_TIER_OVERRIDES: Dict[str, SpellSimTier] = {
     "EDR_874": SpellSimTier.UTILITY,            # 星体平衡：生成月火+星火链，须完整 combo
     "MIS_707": SpellSimTier.UTILITY,            # 批量生产：自伤+抽牌，非打脸
     "JAIL_312": SpellSimTier.UTILITY,           # 私藏魔杖：生成奥术飞弹，须 combo 模拟
+    "JAIL_941": SpellSimTier.UTILITY,           # 神圣之拥：治疗+生成黑暗之拥，须 combo
+    "JAIL_941t": SpellSimTier.DIRECT_FACE,      # 黑暗之拥：4 直伤（可打脸）
 }
 
 

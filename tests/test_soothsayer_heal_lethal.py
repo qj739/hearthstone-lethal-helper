@@ -117,9 +117,62 @@ def test_soothsayer_still_lethal_when_enough_face():
     print("OK JAIL_912 still lethal", face, eff)
 
 
+def test_red_card_soothsayer_not_blocked_by_sticky_deathrattle():
+    """
+    复现末手漏斩：对手 7 血 + 嘲讽预言师，红牌休眠（不击杀）+ 团队之灵 + 技能 = 7。
+    若上次清嘲 sticky 把预言师亡语 +6 叠进有效血，会假漏斩（场攻已显示 7）。
+    """
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.in_game = True
+    gs.active_player_id = 1
+    _hero(gs, 1, 1, mana=6, used=0)
+    _hero(gs, 2, 2, health=7, armor=0)
+
+    hp = gs.get_entity(65)
+    hp.cardtype = "HERO_POWER"
+    hp.controller = 1
+    hp.zone = "PLAY"
+    hp.card_id = "HERO_10bp"
+    hp.cost = 1
+    hp.tags["ZONE"] = "PLAY"
+    hp.tags["COST"] = 1
+    hp.tags["EXHAUSTED"] = 0
+
+    _minion(gs, 78, 1, 3, 2, card_id="CORE_EX1_319")
+    _minion(gs, 20, 1, 1, 2, card_id="JAIL_460")
+    _minion(gs, 60, 2, 6, 6, card_id="JAIL_912", taunt=True)
+
+    for eid, cid, cost, ctype in (
+        (25, "TOY_644", 1, "SPELL"),
+        (16, "TOY_028", 2, "MINION"),
+    ):
+        c = gs.get_entity(eid)
+        c.cardtype = ctype
+        c.controller = 1
+        c.zone = "HAND"
+        c.card_id = cid
+        c.cost = cost
+        c.tags["ZONE"] = "HAND"
+        c.tags["COST"] = cost
+
+    lc = LethalChecker(gs)
+    lc._last_deathrattle_armor = 6  # sticky：假想上次击杀过预言师
+    face = lc.overlay_board_face_damage()
+    total, _, has = lc.calculate_lethal_potential()
+    line_hp = lc._overlay_line_threshold_hp()
+    assert face >= 7, (face, lc.overlay_spell_note())
+    assert line_hp == 7, line_hp  # 休眠线不应叠亡语 +6
+    assert has, (face, total, has, line_hp, lc.overlay_spell_note())
+    assert lc.overlay_red_prompt_ok(), (face, line_hp)
+    print("OK red card vs soothsayer ignores sticky DR", face, line_hp)
+
+
 if __name__ == "__main__":
     test_soothsayer_deathrattle_heal_unit()
     test_lightshower_deathrattle_heal_unit()
     test_soothsayer_blocks_false_lethal()
     test_soothsayer_still_lethal_when_enough_face()
+    test_red_card_soothsayer_not_blocked_by_sticky_deathrattle()
     print("all ok")

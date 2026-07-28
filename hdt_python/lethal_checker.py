@@ -114,6 +114,7 @@ SPELL_DAMAGE_DB = {
     "VAN_EX1_277": (1, 3, True),
     "JAIL_881": (3, 5, True),      # 奥术绊索：5 随机所有敌人
     "JAIL_881t": (3, 5, True),     # 抽到再触发的绊索（若进手）
+    "JAIL_941t": (2, 4, True),     # 黑暗之拥：4 直伤（埃提耶什翻倍）
     "RLK_843": (1, 2, True),       # 奥术箭（法力渴求8→3伤，快速估算用基底2）
     "EX1_275": (3, 3, True),       # 寒冰枪 Ice Lance
 
@@ -348,18 +349,31 @@ class LethalChecker:
     def get_opponent_effective_hp(self) -> int:
         """对手有效血量（含护甲、清嘲吸血、清嘲/法术触发亡语加甲）"""
         _, _, opp_total = self.get_opponent_health()
-        lifesteal_heal = getattr(self, "_last_lifesteal_heal", 0)
-        deathrattle_armor = getattr(self, "_last_deathrattle_armor", 0)
+        lifesteal_heal = int(getattr(self, "_last_lifesteal_heal", 0) or 0)
+        deathrattle_armor = int(getattr(self, "_last_deathrattle_armor", 0) or 0)
         if getattr(self, "_overlay_face_computed", False):
             lifesteal_heal = max(
                 lifesteal_heal,
-                getattr(self, "_overlay_lifesteal_heal", 0),
+                int(getattr(self, "_overlay_lifesteal_heal", 0) or 0),
             )
             deathrattle_armor = max(
                 deathrattle_armor,
-                getattr(self, "_overlay_deathrattle_armor", 0),
+                int(getattr(self, "_overlay_deathrattle_armor", 0) or 0),
             )
         return opp_total + lifesteal_heal + deathrattle_armor
+
+    def _overlay_line_threshold_hp(self, *, subtract_overlay_lifesteal: bool = False) -> int:
+        """
+        Overlay 最优线专用斩杀血线：只用该线结算的亡语/吸血。
+        避免 quick 清嘲 sticky 把「击杀预言师 +6」叠到「红牌休眠」线上导致假漏斩。
+        """
+        _, _, opp_total = self.get_opponent_health()
+        ls = int(getattr(self, "_overlay_lifesteal_heal", 0) or 0)
+        dr = int(getattr(self, "_overlay_deathrattle_armor", 0) or 0)
+        threshold = opp_total + ls + dr
+        if subtract_overlay_lifesteal:
+            threshold -= ls
+        return max(0, threshold)
 
     def _opponent_hero_hp_after_face_damage(self, defender_shield: bool, face_damage: int) -> int:
         """先攻/打脸后对手英雄剩余有效生命，供邪能弹幕等「最低血敌人」法术模拟。"""
@@ -537,7 +551,7 @@ class LethalChecker:
         display = mc_max if uses_random else face
         if display <= 0:
             return False, total_damage
-        lethal_hp = self._lethal_threshold_hp(subtract_overlay_lifesteal=True)
+        lethal_hp = self._overlay_line_threshold_hp(subtract_overlay_lifesteal=True)
         boosted_total = max(total_damage, display)
         if uses_random:
             # 与 overlay_red_prompt_ok 一致：不用乐观上限当面确定斩
@@ -2798,7 +2812,7 @@ class LethalChecker:
             return False
         face = int(getattr(self, "_overlay_total_face", 0) or 0)
         mc_max, lethal_prob, uses_random, _top = self.overlay_face_stats()
-        threshold = self._lethal_threshold_hp(subtract_overlay_lifesteal=True)
+        threshold = self._overlay_line_threshold_hp(subtract_overlay_lifesteal=True)
         if threshold <= 0:
             return False
         if uses_random:
@@ -3379,6 +3393,10 @@ class LethalChecker:
         # 回退：纯随从交换 / 无法术场攻
         fb, enemy_after, board_part_hint = self._best_fallback_board_line(
             board_view, player_id, opp_taunts, defender_shield,
+        )
+        self._overlay_lifesteal_heal = 0
+        self._overlay_deathrattle_armor = (
+            sim_armor_gain(enemy_after or []) + sim_hero_heal(enemy_after or [])
         )
 
         mc_max, prob, top_outcomes, board_part = self._monte_carlo_pure_board_end_turn(
@@ -4012,6 +4030,9 @@ class LethalChecker:
         attackers = []
 
         if opp_taunts:
+            # 先清 sticky，避免上次击杀预言师等亡语回血污染「本回合清不掉嘲」的判定
+            self._last_lifesteal_heal = 0
+            self._last_deathrattle_armor = 0
             total_face, lifesteal_heal, can_bypass = self._calculate_board_damage_with_taunts(
                 atk_board_view, attacker_id, opp_taunts, defender_shield=opp_shield
             )

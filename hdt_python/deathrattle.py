@@ -279,9 +279,8 @@ def _damage_and_maybe_dr(
     if unit is dead:
         return
     was_alive = unit.get("health", 0) > 0
-    dealt = _apply_damage(unit, amount)
-    if unit.get("lifesteal") and dealt > 0:
-        result.opponent_lifesteal_heal += dealt
+    _apply_damage(unit, amount)
+    # 亡语 AOE 打到吸血随从：不触发对方吸血（吸血仅在其造成伤害时）
     if was_alive and unit.get("health", 0) <= 0 and unit.get("kind") != "hero":
         sub = resolve_minion_death(
             unit, enemy_board, fighters,

@@ -33,6 +33,10 @@ ATTACK_INTERLEAVE_BATTLECRY_IDS: Set[str] = (
 ATTACK_INTERLEAVE_LOCATION_IDS: Set[str] = frozenset({
     "REV_290",       # 赎罪教堂 +2/+1（先攻再 buff 再攻）
     "CORE_REV_290",
+    "TIME_044",      # 诺莫瑞根：抬攻后打脸
+    "TIME_044t1",
+    "TIME_044t2",
+    "JAM_009",       # 闪亮舞池：给突袭后再攻
 })
 
 ATTACK_INTERLEAVE_SPELL_IDS: Set[str] = frozenset({

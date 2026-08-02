@@ -90,6 +90,61 @@ def test_wand_plus_missiles_lethal_vs_4():
     print("OK wand lethal", face, note, lethal)
 
 
+def test_wand_missile_mana_spent_includes_generated():
+    """私藏魔杖+3飞弹费用应为 2+1+1+1=5，不能只记魔杖 2 费。"""
+    from hdt_python.spell_board import spell_sequence_mana_left
+
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.active_player_id = 1
+    gs.in_game = True
+    _hero(gs, 1, 1, mana=5)
+    _hero(gs, 2, 2, hp=30, dmg=20)  # 10 血
+    _hand_spell(gs, 30, 1, "JAIL_312", 2)
+
+    defn = get_board_spell_def("JAIL_312")
+    card = next(c for c in gs.get_hand(1) if c.card_id == "JAIL_312")
+    seq = [(defn, 2, card)]
+    left = spell_sequence_mana_left(seq, 5)
+    assert left == 0, f"expected 0 mana left after wand+3 missiles, got {left}"
+
+    lc = LethalChecker(gs)
+    face = lc.overlay_board_face_damage()
+    spent = getattr(lc, "_overlay_mana_spent", 0)
+    _, _, _, spell_face, _ = lc.overlay_board_breakdown()
+    assert spent == 5, f"overlay mana_spent expected 5, got {spent} face={face}"
+    assert spell_face == 9, f"three missiles expected 9 spell face, got {spell_face}"
+    print("OK wand mana spent", spent, "spell", spell_face, "face", face)
+
+
+def test_wand_not_enough_mana_for_fourth_missile():
+    """魔杖后手牌另有飞弹时，3 费只能再打 3 发，不能把第 4 发算进去。"""
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.active_player_id = 1
+    gs.in_game = True
+    _hero(gs, 1, 1, mana=3)
+    _hero(gs, 2, 2, hp=30, dmg=21)  # 9 血
+    # 已生成在手的 4 张飞弹（魔杖已打出）
+    for i, eid in enumerate((30, 31, 32, 33)):
+        _hand_spell(gs, eid, 1, "EX1_277", 1)
+
+    lc = LethalChecker(gs)
+    face = lc.overlay_board_face_damage()
+    spent = getattr(lc, "_overlay_mana_spent", 0)
+    note = lc.overlay_spell_note()
+    _, _, _, spell_face, _ = lc.overlay_board_breakdown()
+    assert spent == 3, (spent, face, note)
+    assert spell_face == 9, (spell_face, note)
+    # 关键：不得把第 4 发算进费用或分项
+    assert "奥术飞弹+奥术飞弹+奥术飞弹+奥术飞弹" not in note, note
+    print("OK three missiles only", spell_face, spent, note)
+
+
 if __name__ == "__main__":
     test_contraband_wands_queues_missiles()
     test_wand_plus_missiles_lethal_vs_4()
+    test_wand_missile_mana_spent_includes_generated()
+    test_wand_not_enough_mana_for_fourth_missile()

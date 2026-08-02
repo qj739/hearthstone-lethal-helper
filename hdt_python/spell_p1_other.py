@@ -30,7 +30,7 @@ def _apply_optimal_friendly_buff(
     enemy_shield: bool,
     can_face: Optional[bool] = None,
 ) -> None:
-    best_score = -1
+    best_key = None
     best_idx: Optional[int] = None
     for i, f in enumerate(fighters):
         if f.get("kind") != "minion" or f.get("health", 0) <= 0:
@@ -38,13 +38,25 @@ def _apply_optimal_friendly_buff(
         fs = deepcopy(fighters)
         ts = deepcopy(taunts)
         fs[i] = dict(fs[i])
-        fs[i]["atk"] = fs[i].get("atk", 0) + bonus_atk
+        new_atk = fs[i].get("atk", 0) + bonus_atk
+        fs[i]["atk"] = new_atk
         fs[i]["health"] = fs[i].get("health", 0) + bonus_health
         if can_face is not None:
             fs[i]["can_face"] = can_face
-        score = project_board_face_after_spell(ts, fs, enemy_shield) or 0
-        if score > best_score:
-            best_score = score
+        face = project_board_face_after_spell(ts, fs, enemy_shield) or 0
+        clear_face = sum(
+            int(x.get("atk", 0) or 0)
+            for x in fs
+            if x.get("kind") == "minion"
+            and int(x.get("health", 0) or 0) > 0
+            and x.get("can_face", True)
+        )
+        if face < clear_face:
+            key = (1, clear_face, new_atk, face)
+        else:
+            key = (0, face, new_atk, 0)
+        if best_key is None or key > best_key:
+            best_key = key
             best_idx = i
     if best_idx is not None:
         fighters[best_idx]["atk"] = fighters[best_idx].get("atk", 0) + bonus_atk

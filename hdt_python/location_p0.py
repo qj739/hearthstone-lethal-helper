@@ -154,6 +154,13 @@ def _apply_erupting_volcano(
     )
 
 
+def _has_friendly_minion(gs: "GameState", player_id: int) -> bool:
+    return any(
+        m.current_health > 0
+        for m in gs.get_board(player_id)
+    )
+
+
 def location_has_valid_target(
     defn: BoardSpellDef,
     gs: "GameState",
@@ -161,7 +168,106 @@ def location_has_valid_target(
 ) -> bool:
     if "REV_290" in defn.card_ids or "CORE_REV_290" in defn.card_ids:
         return pick_cathedral_buff_target(gs, player_id) is not None
+    ids = set(defn.card_ids)
+    if ids & {"TIME_044", "TIME_044t1", "TIME_044t2", "JAM_009"}:
+        return _has_friendly_minion(gs, player_id)
     return True
+
+
+def _pick_buff_fighter_index(fighters: List[dict]) -> Optional[int]:
+    """优选：本回合可攻且可打脸的随从（抬攻直接加场攻）。"""
+    best_idx: Optional[int] = None
+    best_key = None
+    for i, f in enumerate(fighters):
+        if f.get("kind") != "minion" or int(f.get("health", 0) or 0) <= 0:
+            continue
+        if f.get("dormant"):
+            continue
+        atk_left = int(f.get("attacks_left", 0) or 0)
+        can_face = bool(f.get("can_face", True))
+        atk = int(f.get("atk", 0) or 0)
+        # 可攻可打脸优先，其次仅可攻，再次任意活随从
+        key = (
+            2 if atk_left > 0 and can_face else (1 if atk_left > 0 else 0),
+            atk_left * (atk + 2) if can_face else 0,
+            atk,
+        )
+        if best_key is None or key > best_key:
+            best_key = key
+            best_idx = i
+    return best_idx
+
+
+def _apply_gnomeregan_buff(
+    taunts,
+    fighters,
+    *,
+    mult: int = 1,
+    enemy_shield=False,
+    divine_shield: bool = False,
+    **_kw,
+) -> SpellApplyResult:
+    """诺莫瑞根系列：使一个友方随从 +2/+1（未来形态另给圣盾）。亡语打脸 v1 不计。"""
+    _ = taunts, enemy_shield
+    idx = _pick_buff_fighter_index(fighters)
+    if idx is None:
+        return SpellApplyResult()
+    bonus_atk = 2 * mult
+    bonus_hp = 1 * mult
+    f = dict(fighters[idx])
+    f["atk"] = int(f.get("atk", 0) or 0) + bonus_atk
+    f["health"] = int(f.get("health", 0) or 0) + bonus_hp
+    if divine_shield:
+        f["shield"] = True
+    fighters[idx] = f
+    return SpellApplyResult()
+
+
+def _apply_gnomeregan_past(taunts, fighters, *, mult=1, enemy_shield=False, **kw):
+    return _apply_gnomeregan_buff(
+        taunts, fighters, mult=mult, enemy_shield=enemy_shield, divine_shield=False, **kw,
+    )
+
+
+def _apply_gnomeregan_present(taunts, fighters, *, mult=1, enemy_shield=False, **kw):
+    # 现在：+2/+1 + 亡语 2 脸（v1 仅 buff）
+    return _apply_gnomeregan_buff(
+        taunts, fighters, mult=mult, enemy_shield=enemy_shield, divine_shield=False, **kw,
+    )
+
+
+def _apply_gnomeregan_future(taunts, fighters, *, mult=1, enemy_shield=False, **kw):
+    return _apply_gnomeregan_buff(
+        taunts, fighters, mult=mult, enemy_shield=enemy_shield, divine_shield=True, **kw,
+    )
+
+
+def _apply_glitter_dancefloor(
+    taunts,
+    fighters,
+    *,
+    mult=1,
+    enemy_shield=False,
+    **_kw,
+) -> SpellApplyResult:
+    """闪亮舞池：使你的所有随从获得突袭（上场疲劳随从可攻怪、不可打脸）。"""
+    _ = taunts, enemy_shield, mult
+    for i, f in enumerate(fighters):
+        if f.get("kind") != "minion" or int(f.get("health", 0) or 0) <= 0:
+            continue
+        if f.get("dormant"):
+            continue
+        atk = int(f.get("atk", 0) or 0)
+        if atk <= 0:
+            continue
+        updated = dict(f)
+        updated["rush"] = True
+        if int(updated.get("attacks_left", 0) or 0) <= 0:
+            # 召唤疲劳 → 突袭：可攻随从一次，仍不能打脸
+            updated["attacks_left"] = 1
+            updated["can_face"] = False
+        fighters[i] = updated
+    return SpellApplyResult()
 
 
 def _register_p0_locations() -> None:
@@ -178,6 +284,34 @@ def _register_p0_locations() -> None:
         name="喷发火山",
         apply=_apply_erupting_volcano,
         uses_random=True,
+    ))
+    _register_location(BoardSpellDef(
+        card_ids=("TIME_044",),
+        base_cost=0,
+        name="过去的诺莫瑞根",
+        apply=_apply_gnomeregan_past,
+        uses_random=False,
+    ))
+    _register_location(BoardSpellDef(
+        card_ids=("TIME_044t1",),
+        base_cost=0,
+        name="现在的诺莫瑞根",
+        apply=_apply_gnomeregan_present,
+        uses_random=False,
+    ))
+    _register_location(BoardSpellDef(
+        card_ids=("TIME_044t2",),
+        base_cost=0,
+        name="未来的诺莫瑞根",
+        apply=_apply_gnomeregan_future,
+        uses_random=False,
+    ))
+    _register_location(BoardSpellDef(
+        card_ids=("JAM_009",),
+        base_cost=0,
+        name="闪亮舞池",
+        apply=_apply_glitter_dancefloor,
+        uses_random=False,
     ))
 
 

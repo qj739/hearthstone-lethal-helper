@@ -119,30 +119,62 @@ def kill_taunt_outcomes(
     taunt: dict,
     other_taunts: List[dict],
 ) -> List[Tuple[List[dict], int]]:
-    outcomes: List[Tuple[List[dict], int]] = []
+    """击杀单个嘲讽后的场面。
 
-    def dfs(fs: List[dict], t: dict, heal: int) -> None:
+    旧实现对每次挥击做全排列 DFS，亡者大军等召出多个突袭后会指数爆炸卡死。
+    改为贪心：优先消耗不能打脸的突袭，再消耗其余随从（低攻优先，保留高攻打脸）。
+    """
+    fs = copy.deepcopy(fighters)
+    t = copy.deepcopy(taunt)
+    other = copy.deepcopy(other_taunts)
+    heal = 0
+
+    def _swing_key(idx: int) -> tuple:
+        f = fs[idx]
+        # 突袭且不能打脸：优先用于清嘲
+        rush_only = 0 if (f.get("rush") and not f.get("can_face", True)) else 1
+        # 同档优先低攻，减少对高攻打脸的浪费
+        return (rush_only, int(f.get("atk", 0) or 0), idx)
+
+    guard = 0
+    while not taunt_is_dead(t):
+        guard += 1
+        if guard > 64:
+            break
+        candidates = [
+            i for i, f in enumerate(fs)
+            if f.get("attacks_left", 0) > 0 and f.get("health", 0) > 0
+        ]
+        if not candidates:
+            break
+        i = min(candidates, key=_swing_key)
+        heal += apply_single_attack(fs[i], t)
         if taunt_is_dead(t):
-            outcomes.append((fs, heal))
-            return
-        if not any(f["attacks_left"] > 0 and f["health"] > 0 for f in fs):
-            return
-        for i in range(len(fs)):
-            if fs[i]["attacks_left"] <= 0 or fs[i]["health"] <= 0:
-                continue
-            fs2 = copy.deepcopy(fs)
-            t2 = copy.deepcopy(t)
-            other2 = copy.deepcopy(other_taunts)
-            h = apply_single_attack(fs2[i], t2)
-            if taunt_is_dead(t2):
-                board2 = other2 + [t2]
-                resolve_minion_death(t2, board2, fs2)
+            board2 = other + [t]
+            resolve_minion_death(t, board2, fs)
+            remove_dead_taunts(board2)
+            other[:] = [m for m in board2 if m is not t and m.get("health", 0) > 0]
+            # 己方随从被反击打死时也要结算亡语
+            if fs[i].get("health", 0) <= 0:
+                resolve_minion_death(fs[i], board2, fs)
                 remove_dead_taunts(board2)
-                other2[:] = [m for m in board2 if m is not t2 and m.get("health", 0) > 0]
-            dfs(fs2, t2, heal + h)
+                other[:] = [
+                    m for m in board2
+                    if m is not t and m.get("health", 0) > 0 and m.get("kind") != "hero"
+                ]
+            break
+        if fs[i].get("health", 0) <= 0:
+            board2 = other + [t]
+            resolve_minion_death(fs[i], board2, fs)
+            remove_dead_taunts(board2)
+            other[:] = [
+                m for m in board2
+                if m is not t and m.get("health", 0) > 0 and m.get("kind") != "hero"
+            ]
 
-    dfs(copy.deepcopy(fighters), copy.deepcopy(taunt), 0)
-    return outcomes
+    if not taunt_is_dead(t):
+        return []
+    return [(fs, heal)]
 
 
 def find_best_taunt_clear_face(
@@ -171,19 +203,27 @@ def find_best_taunt_clear_state(
     best_heal = 0
     best_fighters: Optional[List[dict]] = None
 
-    for fs_after, heal_here in kill_taunt_outcomes(fighters, taunts[0], taunts[1:]):
-        sub_face, sub_heal, sub_fighters, _sub_taunts = find_best_taunt_clear_state(
-            fs_after, taunts[1:], defender_shield,
-        )
-        if sub_face is None:
-            continue
-        total_heal = heal_here + sub_heal
-        if best_face is None or sub_face > best_face or (
-            sub_face == best_face and total_heal < best_heal
-        ):
-            best_face = sub_face
-            best_heal = total_heal
-            best_fighters = sub_fighters
+    # 嘲讽数量通常很少：尝试每一种「先打哪个」以兼顾亡语顺序，避免只打 list[0]
+    order_indices = list(range(len(taunts)))
+    if len(taunts) > 4:
+        # 极端多嘲讽时只按当前顺序清，避免 k! 
+        order_indices = [0]
+
+    for first in order_indices:
+        ordered = [taunts[first]] + [taunts[j] for j in range(len(taunts)) if j != first]
+        for fs_after, heal_here in kill_taunt_outcomes(fighters, ordered[0], ordered[1:]):
+            sub_face, sub_heal, sub_fighters, _sub_taunts = find_best_taunt_clear_state(
+                fs_after, ordered[1:], defender_shield,
+            )
+            if sub_face is None:
+                continue
+            total_heal = heal_here + sub_heal
+            if best_face is None or sub_face > best_face or (
+                sub_face == best_face and total_heal < best_heal
+            ):
+                best_face = sub_face
+                best_heal = total_heal
+                best_fighters = sub_fighters
 
     if best_face is None:
         return None, 0, None, taunts

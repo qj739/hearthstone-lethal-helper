@@ -92,8 +92,27 @@ def test_climactic_necrotic_zero_script_no_damage():
     assert res.direct_face_damage == 0
 
 
+def test_climactic_necrotic_summons_souls_summoning_sick():
+    """召唤灵魂为召唤失调，不增加当回合打脸，但会占场面。"""
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    card = _hand_spell(gs, 30, 1, script_dmg=6)
+    fighters: list = []
+    enemy = []
+    res = _apply_climactic_necrotic_explosion(
+        enemy, fighters, mult=1, enemy_shield=False, card=card, gs=gs, player_id=1,
+    )
+    assert res.direct_face_damage == 6
+    souls = [f for f in fighters if f.get("card_id") == "ETC_522t"]
+    assert len(souls) == 4
+    assert all(s["atk"] == 8 and s["health"] == 2 for s in souls)
+    assert all(s["attacks_left"] == 0 and not s.get("can_face") for s in souls)
+
+
 if __name__ == "__main__":
     test_climactic_necrotic_script_damage()
     test_climactic_necrotic_lethal_face()
     test_climactic_necrotic_zero_script_no_damage()
+    test_climactic_necrotic_summons_souls_summoning_sick()
     print("ok")

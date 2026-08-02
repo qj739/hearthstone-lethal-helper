@@ -240,23 +240,23 @@ def _apply_damage(
     taunts: Optional[List[dict]] = None,
     fighters: Optional[List[dict]] = None,
 ) -> int:
-    """对模拟单位造成伤害，返回对手因吸血获得的回复量。击杀时触发亡语。"""
+    """对模拟单位造成伤害。击杀时触发亡语。
+
+    返回值曾表示「对手因吸血回复」，但法术/效果打到吸血随从上并不会触发吸血
+    （吸血只在随从造成伤害时触发），故恒为 0；交换反击吸血见 combat_sim。
+    """
     if amount <= 0 or unit.get("health", 0) <= 0:
         return 0
-    heal = 0
     was_alive = unit.get("health", 0) > 0
     if unit.get("shield"):
         unit["shield"] = False
         amount -= 1
         if amount <= 0:
             return 0
-    dealt = min(amount, max(unit["health"], 0))
     unit["health"] -= amount
     if was_alive and unit.get("health", 0) <= 0 and taunts is not None and fighters is not None:
         resolve_minion_death(unit, taunts, fighters)
-    if unit.get("lifesteal") and dealt > 0:
-        heal += dealt
-    return heal
+    return 0
 
 
 def _heal_unit(unit: dict, amount: int) -> None:
@@ -2029,6 +2029,10 @@ _SPELL_SIM_TIER_OVERRIDES: Dict[str, SpellSimTier] = {
     "JAIL_312": SpellSimTier.UTILITY,           # 私藏魔杖：生成奥术飞弹，须 combo 模拟
     "JAIL_941": SpellSimTier.UTILITY,           # 神圣之拥：治疗+生成黑暗之拥，须 combo
     "JAIL_941t": SpellSimTier.DIRECT_FACE,      # 黑暗之拥：4 直伤（可打脸）
+    # 净场须与「拦住他们！」等 buff 同层，才能枚举「先 buff 抬攻再净场」；
+    # 若留在 CLEAR_BOARD，分层会固定成先净场（连 6 攻仙鹤一起清掉）后 buff
+    "REV_252": SpellSimTier.UTILITY,
+    "REV_252t": SpellSimTier.UTILITY,
 }
 
 
@@ -2662,17 +2666,61 @@ def spell_sequence_mana_left(
     sequence: List["SpellPlayStep"],
     mana_budget: Optional[int],
 ) -> Optional[int]:
-    """估算法术序列实际消耗后的剩余法力（饮品连喝 / 冰冻之触回手另付费用）。"""
+    """估算法术序列实际消耗后的剩余法力。
+
+    含：饮品连喝、冰冻之触回手、以及私藏魔杖/初始之火等 add_hand_* 衍生牌费用。
+    （旧实现只扣序列里原牌费用，会把魔杖生成的奥术飞弹当成 0 费。）
+    """
     if mana_budget is None:
         return None
     mana_left = mana_budget
     from .spell_p0_direct import _frozen_touch_infused
 
-    for defn, cost, card in sequence:
+    pending: List[SpellPlayStep] = []
+    idx = 0
+    while idx < len(sequence) or pending:
+        if pending:
+            defn, cost, card = pending.pop(0)
+        else:
+            defn, cost, card = sequence[idx]
+            idx += 1
+
+        if cost > mana_left:
+            continue
+
         cid = _spell_card_id(card) or (defn.card_ids[0] if defn.card_ids else "")
         step_spent, mana_left = _mana_for_drink_step(cid, cost, mana_left)
         if step_spent <= 0 and cost > 0:
             continue
+
+        # 用空场面 apply 只取衍生手牌，避免与完整模拟重复计伤
+        try:
+            res = defn.apply(
+                [], [], mult=1, enemy_shield=False, card=card, rng=random.Random(0),
+            )
+            res = _coerce_spell_apply_result(res)
+        except Exception:
+            res = SpellApplyResult()
+
+        if res.add_hand_spell_id:
+            next_defn = get_board_spell_def(res.add_hand_spell_id)
+            if next_defn:
+                next_cost = next_defn.base_cost
+                pending.append((
+                    next_defn,
+                    next_cost,
+                    _SyntheticSpellCard(res.add_hand_spell_id, next_cost),
+                ))
+        for sid, scost, sdmg in res.add_hand_pending:
+            next_defn = get_board_spell_def(sid)
+            if next_defn:
+                next_cost = scost if scost >= 0 else next_defn.base_cost
+                pending.append((
+                    next_defn,
+                    next_cost,
+                    _SyntheticSpellCard(sid, next_cost, stored_damage=sdmg),
+                ))
+
         # 注能冰冻之触：打出后回手未注能之触，同回合可再付费打一次
         if _frozen_touch_infused(card):
             bounce = get_board_spell_def("REV_601")

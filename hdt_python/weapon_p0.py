@@ -49,13 +49,27 @@ def _weapon_stats_from_card(
     return atk, max(1, dur)
 
 
+def _card_has_windfury(card: Optional["Entity"]) -> bool:
+    if card is None:
+        return False
+    return bool(
+        card.tags.get("WINDFURY")
+        or card.tags.get("MEGA_WINDFURY")
+    )
+
+
 def _hero_attack_slots_left(
     gs: Optional["GameState"],
     player_id: Optional[int],
     *,
     next_turn_preview: bool = False,
+    weapon_windfury: bool = False,
+    weapon_mega_windfury: bool = False,
 ) -> Optional[int]:
-    """本回合英雄剩余可挥次数；None 表示无局面信息（单测乐观按满挥）。"""
+    """本回合英雄剩余可挥次数；None 表示无局面信息（单测乐观按满挥）。
+
+    weapon_windfury：即将装备的武器带风怒时，按风怒抬高上限（未攻击→2，已攻1次→1）。
+    """
     if next_turn_preview:
         return None
     if gs is None or player_id is None:
@@ -73,6 +87,10 @@ def _hero_attack_slots_left(
     if _tag(hero, "CANT_ATTACK") or _tag(hero, "FROZEN"):
         return 0
     max_a = attacks_per_turn(hero, is_silenced(hero))
+    if weapon_mega_windfury:
+        max_a = max(max_a, 4)
+    elif weapon_windfury:
+        max_a = max(max_a, 2)
     used = attacks_this_turn(hero)
     return max(max_a - used, 0)
 
@@ -117,10 +135,14 @@ def _equip(
     max_swings = (2 if windfury else 1) * mult
     dur_cap = max(1, dur)
     if had_swing_tracker:
+        # 已有挥击 tracker：装备风怒武器时，若英雄尚未用尽风怒次数，抬到风怒上限
+        if windfury and remaining > 0:
+            remaining = max(remaining, max_swings)
         swings = min(remaining, max_swings, dur_cap)
     else:
         slots = _hero_attack_slots_left(
             gs, player_id, next_turn_preview=next_turn_preview,
+            weapon_windfury=windfury,
         )
         if slots is not None:
             swings = min(slots, max_swings, dur_cap) if slots > 0 else 0
@@ -331,6 +353,13 @@ def _apply_muradin_hammer(t, f, *, mult, **_kw):
     return SpellApplyResult()
 
 
+def _apply_horn_of_the_windlord(t, f, *, mult, card=None, **_kw):
+    """风领主的管号：3/4 风怒；攻击随从时变 3/3（斩杀线打脸不依赖该效果）。"""
+    wa, wd = _weapon_stats_from_card(card, 3, 4)
+    _equip(f, wa, wd, "JAM_011", mult=mult, windfury=True, **_kw)
+    return SpellApplyResult()
+
+
 def _apply_swamp_knuckles(t, f, *, mult, **_kw):
     _equip(f, 4, 5, "BT_102", mult=mult, **_kw)
     return SpellApplyResult()
@@ -433,7 +462,17 @@ def _apply_hand_of_infinity(t, f, *, mult, **_kw):
     return SpellApplyResult()
 
 
+def _apply_lights_justice(t, f, *, mult, card=None, **_kw):
+    """圣光的正义：1/4；手牌可能被 BUFF，读实体当前攻/耐久。"""
+    wa, wd = _weapon_stats_from_card(card, 1, 4)
+    _equip(f, wa, wd, "CS2_091", mult=mult, **_kw)
+    return SpellApplyResult()
+
+
 _WEAPON_OVERRIDES = {
+    "CS2_091": ("圣光的正义", _apply_lights_justice),
+    "CORE_CS2_091": ("圣光的正义", _apply_lights_justice),
+    "JAM_011": ("风领主的管号", _apply_horn_of_the_windlord),
     "CATA_580": ("灾变战斧", _apply_cata_axe),
     "ETC_423": ("奥金利斧", _apply_ashbringer_lite),
     "RLK_516": ("碎骨手斧", _apply_shatterbone),
@@ -497,14 +536,21 @@ def _register_all_weapons() -> None:
             zh, fn = _WEAPON_OVERRIDES[cid]
             _register_weapon(BoardSpellDef((cid,), cost, zh, fn))
             continue
-        def _fallback(t, f, *, mult, _cid=cid, **_kw):
-            _equip(f, 1, 1, _cid, mult=mult, **_kw)
+        def _fallback(t, f, *, mult, card=None, _cid=cid, **_kw):
+            wa, wd = _weapon_stats_from_card(card, 1, 1)
+            _equip(
+                f, wa, wd, _cid, mult=mult,
+                windfury=_card_has_windfury(card), **_kw,
+            )
             return SpellApplyResult()
 
         _register_weapon(BoardSpellDef((cid,), cost or 0, name, _fallback))
 
     # cards.json / 工作表未收录的覆盖仍需注册（如求真之锤 JAIL_329）
     _override_costs = {
+        "CS2_091": 1,
+        "CORE_CS2_091": 1,
+        "JAM_011": 6,
         "JAIL_329": 7,
         "END_012": 5,
     }

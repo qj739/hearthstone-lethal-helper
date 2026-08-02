@@ -461,7 +461,7 @@ class LethalChecker:
         )
 
     def _opponent_fatigue_counter(self, player_id: Optional[int] = None) -> int:
-        """对手 Player 实体 FATIGUE / FATIGUEREFERENCE（下一次抽牌疲劳伤害）。"""
+        """对手 Player 实体 FATIGUE / FATIGUEREFERENCE（已结算的疲劳层数/上次伤害）。"""
         opp = player_id if player_id is not None else self.game_state.opponent_player_id
         if opp is None:
             return 0
@@ -494,18 +494,16 @@ class LethalChecker:
 
     def _opponent_upcoming_fatigue_damage(self) -> int:
         """
-        对手牌库空时，下回合斩杀预览中可计入的疲劳伤害。
-        对方回合（Overlay 下回合斩）时：对手本回合开始抽牌会吃疲劳，日志 HP 可能滞后。
-        FATIGUE 标签 = 本回合已结算的疲劳次数/伤害；牌库空且从未疲劳时按 1 计。
-        我方回合：对手疲劳发生在我们回合结束之后，不计入本回合斩杀。
+        对手牌库空时计入的下一次抽牌疲劳伤害（FATIGUE + 1；从未疲劳为 1）。
+
+        - 我方回合：结束回合后对方抽牌会吃疲劳，可与本回合打脸拼斩（通灵最强音+疲劳等）。
+        - 对方回合：下回合斩预览同样计入下次疲劳。
         """
-        if not self.is_opponent_turn():
+        if not self.is_local_turn() and not self.is_opponent_turn():
             return 0
         if self._opponent_deck_count() > 0:
             return 0
-        fatigue = self._opponent_fatigue_counter()
-        # FATIGUE=0：本回合抽牌疲劳尚未写入（或首次疲劳）→ 下一次为 1
-        return fatigue if fatigue > 0 else 1
+        return self._opponent_fatigue_counter() + 1
 
     def _lethal_threshold_hp(self, *, subtract_overlay_lifesteal: bool = False) -> int:
         """
@@ -574,11 +572,13 @@ class LethalChecker:
                     board_from_spells = max(0, minion_bd) + max(
                         0, getattr(self, "_overlay_weapon_face", 0),
                     )
+                    # 疲劳在对方抽牌时直伤英雄，可穿嘲讽
                     pierce_face = (
                         max(0, spell_bd)
                         + max(0, getattr(self, "_overlay_hero_power_face", 0))
                         + max(0, getattr(self, "_overlay_hero_buff_face", 0))
                         + max(0, getattr(self, "_overlay_battlecry_face", 0))
+                        + max(0, getattr(self, "_overlay_fatigue_face", 0))
                     )
                     if (
                         board_from_spells <= 0
@@ -2940,7 +2940,7 @@ class LethalChecker:
                 mc_max=mc_max, lethal_prob=prob,
                 uses_random=True, top_outcomes=top_outcomes,
             )
-            return display_total
+            return int(getattr(self, "_overlay_total_face", display_total) or 0)
         self._reset_overlay_board_breakdown(
             pure_board, best_board, best_spell_face, best_total,
             weapon_board=best_weapon_board,
@@ -2948,7 +2948,7 @@ class LethalChecker:
             hero_buff_face=best_hero_buff_face,
             battlecry_face=best_battlecry_face,
         )
-        return best_total
+        return int(getattr(self, "_overlay_total_face", best_total) or 0)
 
     def _best_face_with_board_spells(
         self,
@@ -3052,6 +3052,15 @@ class LethalChecker:
             if self._lethal_budget_expired():
                 break
             if seq and min(c for _, c, _ in seq) > combo_mana:
+                continue
+            # 已有确定性斩杀：不再跑夕阳漫射等随机线的 MC（浪费且会污染步骤展示）
+            if (
+                effective_hp > 0
+                and best_total >= effective_hp
+                and best_seq is not None
+                and not self._line_needs_random(best_seq, fighters)
+                and self._line_needs_random(seq, fighters)
+            ):
                 continue
 
             full_seq = seq + direct_prefix
@@ -3346,7 +3355,13 @@ class LethalChecker:
             self._overlay_direct_face = direct_face
             self._overlay_direct_prefix = direct_prefix
             self._overlay_direct_mana = direct_mana
-            use_display = display_total > 0
+            # 已有确定性斩杀：展示/步骤跟最优斩杀线，勿用夕阳等更高随机伤盖掉
+            best_clean_lethal = (
+                effective_hp > 0
+                and best_total >= effective_hp
+                and not self._line_needs_random(best_seq, fighters)
+            )
+            use_display = display_total > 0 and not best_clean_lethal
             show_total = display_total if use_display else best_total
             show_board = display_board if use_display else best_board
             show_weapon = display_weapon_board if use_display else best_weapon_board
@@ -3358,6 +3373,7 @@ class LethalChecker:
             show_order = display_order if use_display else best_order
             show_hp_name = display_hp_name if use_display else best_hp_name
             show_mana_spent = display_mana_spent if use_display else best_mana_spent
+            show_note = display_note if use_display else best_note
             overlay_face = self._apply_overlay_stats_from_best_line(
                 pure_immediate=pure_immediate,
                 pure_et=pure_et,
@@ -3388,7 +3404,7 @@ class LethalChecker:
             self._overlay_mana_spent = show_mana_spent
             if timed_out:
                 return overlay_face if overlay_face > 0 else 0, "计算超时"
-            return overlay_face, best_note
+            return overlay_face, show_note
 
         # 回退：纯随从交换 / 无法术场攻
         fb, enemy_after, board_part_hint = self._best_fallback_board_line(
@@ -4680,14 +4696,21 @@ class LethalChecker:
         enemy_board: Optional[List[dict]] = None,
         rng: Optional[random.Random] = None,
     ) -> List[Tuple[List[dict], List[dict], int]]:
-        """枚举清掉单个嘲讽后的 (攻击者, 敌方场面, 吸血回血)。场面含亡语召唤。"""
+        """清掉单个嘲讽后的 (攻击者, 敌方场面, 吸血回血)。场面含亡语召唤。
+
+        旧实现对每次挥击做全排列 DFS，亡者大军等召出多个突袭后会指数爆炸卡死。
+        改为贪心：优先消耗不能打脸的突袭，再低攻，保留高攻打脸。
+        """
         from .deathrattle import remove_dead_taunts
         from .rush_combat import ogre_pick_target
 
-        outcomes: List[Tuple[List[dict], List[dict], int]] = []
         all_taunts = [taunt] + list(other_taunts)
-        board = enemy_board if enemy_board is not None else all_taunts
+        board = _clone_combat_states(
+            enemy_board if enemy_board is not None else all_taunts
+        )
+        fs = _clone_combat_states(fighters)
         t_eid = taunt.get("entity_id")
+        heal = 0
 
         def _pick_on_board(board2: List[dict]) -> Optional[dict]:
             if t_eid is not None:
@@ -4696,41 +4719,44 @@ class LethalChecker:
                         return m
             return None
 
-        def dfs(fs: List[dict], board2: List[dict], heal: int):
-            if self._lethal_budget_expired():
-                return
-            pick = _pick_on_board(board2)
-            if pick is None or self._taunt_is_dead(pick):
-                remove_dead_taunts(board2)
-                outcomes.append((_clone_combat_states(fs), _clone_combat_states(board2), heal))
-                return
-            if not any(f["attacks_left"] > 0 and f["health"] > 0 for f in fs):
-                return
-            for i in range(len(fs)):
-                if fs[i]["attacks_left"] <= 0 or fs[i]["health"] <= 0:
-                    continue
-                fs2 = _clone_combat_states(fs)
-                board3 = _clone_combat_states(board2)
-                target = _pick_on_board(board3)
-                if target is None:
-                    continue
-                if fs2[i].get("ogre_misdirect"):
-                    living = self._living_taunt_states(board3)
-                    wrong = ogre_pick_target(target, living, rng)
-                    wrong2 = next(
-                        (x for x in board3 if x.get("entity_id") == wrong.get("entity_id")),
-                        None,
-                    )
-                    if wrong2 is not None:
-                        target = wrong2
-                h = self._apply_single_attack(
-                    fs2[i], target, enemy_board=board3, fighters=fs2, rng=rng,
-                )
-                remove_dead_taunts(board3)
-                dfs(fs2, board3, heal + h)
+        def _swing_key(idx: int) -> tuple:
+            f = fs[idx]
+            rush_only = 0 if (f.get("rush") and not f.get("can_face", True)) else 1
+            return (rush_only, int(f.get("atk", 0) or 0), idx)
 
-        dfs(_clone_combat_states(fighters), _clone_combat_states(board), 0)
-        return outcomes
+        guard = 0
+        while True:
+            if self._lethal_budget_expired():
+                return []
+            guard += 1
+            if guard > 64:
+                break
+            target = _pick_on_board(board)
+            if target is None or self._taunt_is_dead(target):
+                remove_dead_taunts(board)
+                return [(fs, board, heal)]
+            candidates = [
+                i for i, f in enumerate(fs)
+                if f.get("attacks_left", 0) > 0 and f.get("health", 0) > 0
+            ]
+            if not candidates:
+                break
+            i = min(candidates, key=_swing_key)
+            if fs[i].get("ogre_misdirect"):
+                living = self._living_taunt_states(board)
+                wrong = ogre_pick_target(target, living, rng)
+                wrong2 = next(
+                    (x for x in board if x.get("entity_id") == wrong.get("entity_id")),
+                    None,
+                )
+                if wrong2 is not None:
+                    target = wrong2
+            heal += self._apply_single_attack(
+                fs[i], target, enemy_board=board, fighters=fs, rng=rng,
+            )
+            remove_dead_taunts(board)
+
+        return []
 
     def _calculate_board_damage_with_taunts(
         self, board_view, player_id: int, opp_taunts: list, *, defender_shield: bool = False
@@ -4811,32 +4837,41 @@ class LethalChecker:
         best_fighters: Optional[List[dict]] = None
         best_board: List[dict] = board
 
-        for fs_after, board_after, heal_here in self._kill_taunt_outcomes(
-            fighters, taunts[0], taunts[1:],
-            enemy_board=board, rng=rng,
-        ):
+        # 少量嘲讽时尝试不同「先打谁」，兼顾亡语顺序；过多则只按当前顺序
+        order_indices = list(range(len(taunts)))
+        if len(taunts) > 4:
+            order_indices = [0]
+
+        for first in order_indices:
             if self._lethal_budget_expired():
                 break
-            remaining = self._living_taunt_states(board_after)
-            sub_face, sub_heal, sub_fighters, sub_board = self._find_best_taunt_clear_state(
-                fs_after, remaining, defender_shield,
-                enemy_board=board_after, rng=rng,
-            )
-            if sub_face is None:
-                continue
-            total_heal = heal_here + sub_heal
-            sub_armor = sim_armor_gain(sub_board) + sim_hero_heal(sub_board)
-            if best_face is None or sub_face > best_face or (
-                sub_face == best_face and (
-                    total_heal < best_heal
-                    or (total_heal == best_heal and sub_armor < best_armor)
-                )
+            ordered = [taunts[first]] + [taunts[j] for j in range(len(taunts)) if j != first]
+            for fs_after, board_after, heal_here in self._kill_taunt_outcomes(
+                fighters, ordered[0], ordered[1:],
+                enemy_board=board, rng=rng,
             ):
-                best_face = sub_face
-                best_heal = total_heal
-                best_armor = sub_armor
-                best_fighters = sub_fighters
-                best_board = sub_board
+                if self._lethal_budget_expired():
+                    break
+                remaining = self._living_taunt_states(board_after)
+                sub_face, sub_heal, sub_fighters, sub_board = self._find_best_taunt_clear_state(
+                    fs_after, remaining, defender_shield,
+                    enemy_board=board_after, rng=rng,
+                )
+                if sub_face is None:
+                    continue
+                total_heal = heal_here + sub_heal
+                sub_armor = sim_armor_gain(sub_board) + sim_hero_heal(sub_board)
+                if best_face is None or sub_face > best_face or (
+                    sub_face == best_face and (
+                        total_heal < best_heal
+                        or (total_heal == best_heal and sub_armor < best_armor)
+                    )
+                ):
+                    best_face = sub_face
+                    best_heal = total_heal
+                    best_armor = sub_armor
+                    best_fighters = sub_fighters
+                    best_board = sub_board
 
         if best_face is None:
             return None, 0, None, board

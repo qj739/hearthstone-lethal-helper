@@ -481,18 +481,36 @@ def _apply_climactic_necrotic_explosion(
     player_id=None,
     **_kw,
 ) -> SpellApplyResult:
-    """通灵最强音：脚本伤害（TAG_SCRIPT_DATA_NUM_1，随消耗残骸提升）+ 吸血。"""
+    """通灵最强音：脚本伤害 + 吸血，并召唤 NUM_2 个 NUM_3/NUM_4 灵魂（召唤失调）。"""
+    from .spell_board import _summon_friendly_fighter
+
     raw = spell_script_damage(card, default=0, gs=gs, player_id=player_id)
     dmg = _sd(raw, mult=mult, spell_power=spell_power)
-    if dmg <= 0:
-        return SpellApplyResult()
-    res = _apply_optimal_single_target_damage(
-        taunts, fighters, dmg, enemy_shield=enemy_shield,
-    )
-    if res.direct_face_damage > 0:
-        res.self_hero_heal = res.direct_face_damage
-    else:
-        res.self_hero_heal = dmg
+    res = SpellApplyResult()
+    if dmg > 0:
+        res = _apply_optimal_single_target_damage(
+            taunts, fighters, dmg, enemy_shield=enemy_shield,
+        )
+        if res.direct_face_damage > 0:
+            res.self_hero_heal = res.direct_face_damage
+        else:
+            res.self_hero_heal = dmg
+
+    tags = getattr(card, "tags", None) or {}
+    count = int(tags.get("TAG_SCRIPT_DATA_NUM_2", 0) or 0)
+    atk = int(tags.get("TAG_SCRIPT_DATA_NUM_3", 0) or 0)
+    hp = int(tags.get("TAG_SCRIPT_DATA_NUM_4", 0) or 0)
+    if count > 0 and hp > 0:
+        occupied = sum(
+            1 for f in fighters
+            if f.get("kind") == "minion" and int(f.get("health", 0) or 0) > 0
+        )
+        room = max(0, 7 - occupied)
+        n = min(count * max(int(mult), 1), room)
+        for _ in range(n):
+            _summon_friendly_fighter(
+                fighters, atk, hp, card_id="ETC_522t",
+            )
     return res
 
 

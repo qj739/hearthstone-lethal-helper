@@ -633,9 +633,13 @@ class PowerLogParser(LogWatcher):
         self._pending_transform_eids: set = set()
         # CHANGE_ENTITY 后日志常写 NUM_TURNS_IN_PLAY=0；已在场且本回合未攻击的随从应保留原值
         self._transform_preserve_ntp: Dict[int, int] = {}
-        # FULL_ENTITY Updating：方括号 zone 与行内 tag=ZONE 冲突时（回溯快照）以方括号为准
+        # FULL_ENTITY Updating：方括号为坟场等「终态」时，忽略行内历史 ZONE=PLAY（时光回溯）
+        # SETASIDE 只是召唤过渡区，PowerTaskList 括号常滞后，不能用来把已在 PLAY 的单位打回 SETASIDE
         self._full_entity_is_updating = False
         self._full_entity_bracket_zone: Optional[str] = None
+        self._FULL_ENTITY_BRACKET_OVERRIDE_ZONES = frozenset({
+            "GRAVEYARD", "REMOVEDFROMGAME", "DECK", "HAND", "SECRET",
+        })
         self.lines_processed = 0
         self._last_create_game_line = -100000
         self._game_end_emitted = False
@@ -1008,11 +1012,12 @@ class PowerLogParser(LogWatcher):
                     entity.reset_for_new_card(card_id)
                 else:
                     entity.card_id = card_id
-            # Updating 且方括号标明非 PLAY：先落到该区域，避免行内历史 ZONE=PLAY 把坟场单位复活
+            # Updating 且方括号为坟场/牌库等终态：先落到该区域，避免行内历史 ZONE=PLAY 复活
+            # 勿用 SETASIDE 覆盖：通灵最强音等先 SETASIDE 再进 PLAY，TaskList 括号常仍停在 SETASIDE
             if (
                 self._full_entity_is_updating
                 and self._full_entity_bracket_zone
-                and self._full_entity_bracket_zone != "PLAY"
+                in self._FULL_ENTITY_BRACKET_OVERRIDE_ZONES
             ):
                 self._apply_tag(eid, "ZONE", self._full_entity_bracket_zone)
             self.game_state.current_entity_id = eid
@@ -1388,7 +1393,8 @@ class PowerLogParser(LogWatcher):
             if preserve is not None and preserve >= 1:
                 int_value = preserve
 
-        # FULL_ENTITY Updating：方括号为 GRAVEYARD 等时，忽略行内历史 ZONE=PLAY（时光回溯快照）
+        # FULL_ENTITY Updating：方括号为坟场等终态时，忽略行内历史 ZONE=PLAY（时光回溯快照）
+        # SETASIDE 不拦截：随后 TAG_CHANGE ZONE=PLAY 必须生效，否则死忠歌迷等会卡在 SETASIDE
         if tag == "ZONE":
             zones_probe = [
                 "", "PLAY", "DECK", "HAND", "GRAVEYARD",
@@ -1402,8 +1408,7 @@ class PowerLogParser(LogWatcher):
             bracket_z = (self._full_entity_bracket_zone or "").upper()
             if (
                 self._full_entity_is_updating
-                and bracket_z
-                and bracket_z != "PLAY"
+                and bracket_z in self._FULL_ENTITY_BRACKET_OVERRIDE_ZONES
                 and new_zone == "PLAY"
             ):
                 return

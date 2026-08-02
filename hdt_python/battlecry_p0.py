@@ -598,6 +598,13 @@ def _apply_fire_elemental(t, f, *, mult, enemy_shield, card=None, **_kw):
     )
 
 
+def _apply_fire_plume_phoenix(t, f, *, mult, enemy_shield, **_kw):
+    """火羽凤凰 UNG_084：战吼造成 3 点伤害（可打脸或解嘲讽）。"""
+    return _apply_optimal_single_target_damage(
+        t, f, 3 * mult, enemy_shield=enemy_shield,
+    )
+
+
 def _apply_ebonscale_scout(t, f, *, mult, enemy_shield, card=None, **_kw):
     atk = 8 if hand_effect_active(card) else _hand_card_attack(card, 4)
     return _apply_optimal_single_target_damage(
@@ -927,6 +934,51 @@ def _apply_defias_smuggler(
     return SpellApplyResult()
 
 
+def _apply_fanboy(
+    t,
+    f,
+    *,
+    mult,
+    card=None,
+    gs=None,
+    player_id=None,
+    **_kw,
+) -> SpellApplyResult:
+    """饭圈迷弟：抉择；斩杀取 +2 攻与突袭（友方已有随从）。自身 2/2 失调上场。"""
+    before_ids = {
+        u.get("entity_id")
+        for u in f
+        if u.get("kind") == "minion" and u.get("health", 0) > 0
+    }
+    if gs is not None and player_id is not None:
+        for m in gs.get_board(player_id):
+            if m.current_health > 0 and m.entity_id is not None:
+                before_ids.add(m.entity_id)
+    atk = hand_minion_attack(card) if card is not None else 2
+    hp = hand_minion_health(card) if card is not None else 2
+    _summon_friendly_fighter(
+        f, atk * mult, hp * mult, card_id="JAM_027",
+    )
+    if not before_ids:
+        return SpellApplyResult()
+    picked = _pick_best_spell_target_fighter(f, gs=gs, player_id=player_id)
+    if picked is None:
+        return SpellApplyResult()
+    src, key, unit = picked
+    if src == "fighter" and unit.get("entity_id") not in before_ids:
+        return SpellApplyResult()
+    if src == "board" and key not in before_ids:
+        return SpellApplyResult()
+    _apply_buff_to_spell_target(
+        f,
+        picked,
+        bonus_atk=2 * mult,
+        bonus_health=0,
+    )
+    _grant_rush_on_buff_target(f, picked)
+    return SpellApplyResult()
+
+
 def _apply_abusive_sergeant(
     t,
     f,
@@ -1168,6 +1220,7 @@ def _register_p0_battlecry() -> None:
         (("MEND_302",), 4, "废土先锋", _apply_wasteland_vanguard, True),
         (("TIME_609",), 3, "游侠将军希尔瓦娜斯", _apply_sylvanas_ranger, False),
         (("CS2_042", "CORE_CS2_042", "VAN_CS2_042"), 6, "火元素", _apply_fire_elemental, False),
+        (("UNG_084", "CORE_UNG_084"), 4, "火羽凤凰", _apply_fire_plume_phoenix, False),
         # 2. 解场伤
         (("TLC_606",), 3, "拉特维亚护甲师", _apply_latorvian_armorer, False),
         (("DED_507",), 3, "桅台观察员", _apply_crows_nest, False),
@@ -1214,6 +1267,7 @@ def _register_p0_battlecry() -> None:
         (("TOY_513",), 4, "沙画元素", _apply_sand_elemental, False),
         (("AV_294",), 2, "怒爪精锐", _apply_sharpclaw, False),
         (("JAIL_998",), 3, "迪菲亚私运者", _apply_defias_smuggler, False),
+        (("JAM_027",), 2, "饭圈迷弟", _apply_fanboy, False),
         (("CORE_CS2_188", "CS2_188"), 1, "叫嚣的中士", _apply_abusive_sergeant, False),
         (("ETC_420",), 3, "服装裁缝", _apply_outfit_tailor, False),
         (("REV_934",), 6, "屠戮者奥格拉", _apply_ogrillon, False),

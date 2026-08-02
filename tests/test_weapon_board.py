@@ -403,6 +403,111 @@ def test_abusive_sergeant_lethal_through_hero_divine_shield():
     print("OK abusive sergeant lethal through hero DS", face, note)
 
 
+def test_hand_lights_justice_buffed_plus_fireball_lethal():
+    """手牌圣光的正义（BUFF 成 2 攻）+ 火球：对手 7 血时应在装备前识别斩杀。
+
+    复现 2026-07-30 对局：未注册 CS2_091 时只计火球 6，装备后才亮斩。
+    """
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.active_player_id = 1
+    gs.in_game = True
+    hero = _hero(gs, 1, 1, atk479=0)
+    hero.tags["RESOURCES"] = 10
+    hero.tags["RESOURCES_USED"] = 5  # 剩 5 费：火球 4 + 武器 1
+    opp = _hero(gs, 2, 2)
+    opp.health = 30
+    opp.damage = 23  # 7 血
+    _hand_spell(gs, 30, 1, "CORE_CS2_029", 4)
+    _hand_weapon(gs, 50, 1, "CS2_091", 1, atk=2, dur=5)
+
+    checker = LethalChecker(gs)
+    total = checker.overlay_board_face_damage()
+    _, minion_board, weapon_board, spell, _ = checker.overlay_board_breakdown()
+    note = checker.overlay_spell_note() or ""
+    assert weapon_board == 2, (total, weapon_board, spell, note)
+    assert spell == 6, (total, weapon_board, spell, note)
+    assert total >= 8, (total, minion_board, weapon_board, spell, note)
+    assert "圣光的正义" in note or "CS2_091" in note, note
+    assert "火球" in note, note
+    print("OK lights justice+fireball lethal before equip", total, note)
+
+
+def test_unregistered_hand_weapon_uses_live_stats():
+    """未收录 card_id 的手牌武器仍按实体攻/耐久计入挥击。"""
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.active_player_id = 1
+    gs.in_game = True
+    hero = _hero(gs, 1, 1, atk479=0)
+    hero.tags["RESOURCES"] = 2
+    hero.tags["RESOURCES_USED"] = 0
+    _hero(gs, 2, 2)
+    _hand_weapon(gs, 50, 1, "ZZ_TEST_WEAPON_X", 1, atk=4, dur=2)
+
+    checker = LethalChecker(gs)
+    total = checker.overlay_board_face_damage()
+    _, _, weapon_board, _, _ = checker.overlay_board_breakdown()
+    assert weapon_board == 4, (total, weapon_board, checker.overlay_spell_note())
+    assert total == 4, (total, checker.overlay_spell_note())
+    print("OK unregistered hand weapon live stats", total)
+
+
+def test_hand_horn_of_the_windlord_windfury_lethal():
+    """手牌风领主的管号：风怒应计 3+3=6，装备前即可识别斩杀。
+
+    复现 2026-07-31 对局：装备前场攻不足，装备后才按实体风怒双挥亮斩。
+    """
+    from hdt_python.weapon_board import get_weapon_def
+
+    assert get_weapon_def("JAM_011") is not None
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.active_player_id = 1
+    gs.in_game = True
+    hero = _hero(gs, 1, 1, atk479=0)
+    hero.tags["RESOURCES"] = 6
+    hero.tags["RESOURCES_USED"] = 0
+    opp = _hero(gs, 2, 2)
+    opp.health = 30
+    opp.damage = 24  # 6 血
+    w = _hand_weapon(gs, 50, 1, "JAM_011", 6, atk=3, dur=4)
+    w.tags["WINDFURY"] = 1
+
+    checker = LethalChecker(gs)
+    total = checker.overlay_board_face_damage()
+    _, minion_board, weapon_board, spell, _ = checker.overlay_board_breakdown()
+    note = checker.overlay_spell_note() or ""
+    assert weapon_board == 6, (total, weapon_board, spell, note)
+    assert total >= 6, (total, minion_board, weapon_board, spell, note)
+    assert "风领主的管号" in note, note
+    print("OK horn of windlord hand windfury lethal", total, note)
+
+
+def test_default_hand_weapon_reads_windfury_tag():
+    """未收录但带 WINDFURY 标签的手牌武器应按双挥计伤。"""
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.active_player_id = 1
+    gs.in_game = True
+    hero = _hero(gs, 1, 1, atk479=0)
+    hero.tags["RESOURCES"] = 2
+    hero.tags["RESOURCES_USED"] = 0
+    _hero(gs, 2, 2)
+    w = _hand_weapon(gs, 50, 1, "ZZ_TEST_WF_WEAPON", 1, atk=2, dur=3)
+    w.tags["WINDFURY"] = 1
+
+    checker = LethalChecker(gs)
+    total = checker.overlay_board_face_damage()
+    _, _, weapon_board, _, _ = checker.overlay_board_breakdown()
+    assert weapon_board == 4, (total, weapon_board, checker.overlay_spell_note())
+    print("OK default hand weapon windfury tag", total)
+
+
 if __name__ == "__main__":
     test_atiesh_weapon_strike_when_hero_479_zero()
     test_atiesh_weapon_in_overlay_with_moonwell()
@@ -415,4 +520,8 @@ if __name__ == "__main__":
     test_hand_of_infinity_cannot_face()
     test_split_fighter_face_divine_shield_once()
     test_abusive_sergeant_lethal_through_hero_divine_shield()
+    test_hand_lights_justice_buffed_plus_fireball_lethal()
+    test_unregistered_hand_weapon_uses_live_stats()
+    test_hand_horn_of_the_windlord_windfury_lethal()
+    test_default_hand_weapon_reads_windfury_tag()
     print("all passed")

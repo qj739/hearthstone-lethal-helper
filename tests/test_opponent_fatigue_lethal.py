@@ -32,7 +32,7 @@ def _player(gs, eid, pid, *, fatigue=0):
 
 
 def test_opponent_turn_fatigue_added_to_face():
-    """对方回合：牌库空、疲劳3、英雄15血；场攻12+疲3=15 应判下回合斩。"""
+    """对方回合：牌库空、已疲3 → 下次疲4；场攻12+疲4=16，对手15血应判下回合斩。"""
     gs = GameState()
     gs.local_player_id = 2
     gs.opponent_player_id = 1
@@ -43,34 +43,89 @@ def test_opponent_turn_fatigue_added_to_face():
 
     lc = LethalChecker(gs)
     assert lc._opponent_deck_count() == 0
-    assert lc._opponent_upcoming_fatigue_damage() == 3
+    assert lc._opponent_fatigue_counter() == 3
+    assert lc._opponent_upcoming_fatigue_damage() == 4
     assert lc._lethal_threshold_hp() == 15
-    assert lc._lethal_search_threshold_hp() == 12
+    assert lc._lethal_search_threshold_hp() == 11
 
     lc._reset_overlay_board_breakdown(12, 12, 0, 12)
-    assert lc.overlay_fatigue_face() == 3
-    assert lc.cached_overlay_face() == 15
-    assert lc.overlay_display_face() == 15
+    assert lc.overlay_fatigue_face() == 4
+    assert lc.cached_overlay_face() == 16
+    assert lc.overlay_display_face() == 16
     assert lc.overlay_red_prompt_ok(opp_lethal_now=False) is True
 
 
-def test_local_turn_fatigue_not_counted():
-    """我方回合：疲劳发生在回合结束后，不应计入总和。"""
+def test_opponent_turn_fatigue_zero_means_next_is_one():
+    """牌库空但尚未疲劳：下一次为 1。"""
+    gs = GameState()
+    gs.local_player_id = 2
+    gs.opponent_player_id = 1
+    gs.active_player_id = 1
+    _hero(gs, 10, 2)
+    _hero(gs, 20, 1, dmg=20)
+    _player(gs, 5, 1, fatigue=0)
+
+    lc = LethalChecker(gs)
+    assert lc._opponent_upcoming_fatigue_damage() == 1
+    lc._reset_overlay_board_breakdown(9, 9, 0, 9)
+    assert lc.overlay_fatigue_face() == 1
+    assert lc.cached_overlay_face() == 10
+
+
+def test_local_turn_fatigue_counted_for_end_turn_lethal():
+    """我方回合：结束回合后对方抽牌疲劳应计入（最强音+疲劳等）。"""
     gs = GameState()
     gs.local_player_id = 2
     gs.opponent_player_id = 1
     gs.active_player_id = 2
     _hero(gs, 10, 2)
-    _hero(gs, 20, 1, dmg=15)
+    _hero(gs, 20, 1, dmg=21)  # 9 血
     _player(gs, 5, 1, fatigue=3)
 
     lc = LethalChecker(gs)
-    assert lc._opponent_upcoming_fatigue_damage() == 0
-    assert lc._lethal_threshold_hp() == 15
-    lc._reset_overlay_board_breakdown(12, 12, 0, 12)
-    assert lc.overlay_fatigue_face() == 0
-    assert lc.cached_overlay_face() == 12
-    assert lc.overlay_red_prompt_ok(opp_lethal_now=False) is False
+    assert lc._opponent_upcoming_fatigue_damage() == 4
+    assert lc._lethal_threshold_hp() == 9
+    assert lc._lethal_search_threshold_hp() == 5
+
+    lc._reset_overlay_board_breakdown(6, 0, 6, 6)
+    assert lc.overlay_fatigue_face() == 4
+    assert lc.cached_overlay_face() == 10
+    assert lc.overlay_red_prompt_ok(opp_lethal_now=False) is True
+
+
+def test_climactic_plus_fatigue_lethal_from_log():
+    """复盘：通灵最强音 6 + 下次疲劳 4 ≥ 对手 9 血。"""
+    import contextlib
+    import io
+    from hdt_python.power_parser import PowerLogParser
+
+    log = Path(
+        r"C:\Program Files (x86)\Hearthstone\Logs"
+        r"\Hearthstone_2026_07_31_22_51_53\Power.log"
+    )
+    if not log.is_file():
+        print("SKIP climactic+fatigue log")
+        return
+    target = 415200
+    gs = GameState()
+    p = PowerLogParser(str(log), gs)
+    with contextlib.redirect_stdout(io.StringIO()):
+        with log.open(encoding="utf-8", errors="ignore") as f:
+            for i, line in enumerate(f, 1):
+                if line.strip():
+                    p.process_line(line.rstrip())
+                if i >= target:
+                    break
+    gs.in_game = True
+    lc = LethalChecker(gs)
+    assert lc._opponent_deck_count() == 0
+    assert lc._opponent_fatigue_counter() == 3
+    assert lc._opponent_upcoming_fatigue_damage() == 4
+    face = lc.overlay_board_face_damage()
+    assert lc.overlay_fatigue_face() == 4
+    assert face >= 9, (face, lc.overlay_spell_note(), lc.overlay_board_breakdown())
+    assert lc.overlay_red_prompt_ok(), (face, lc.overlay_spell_note())
+    print("OK climactic+fatigue", face, lc.overlay_spell_note())
 
 
 def test_opponent_turn_with_cards_in_deck_no_fatigue():
@@ -152,14 +207,16 @@ def test_fatigue_tag_from_battle_tag_power_log():
     assert lc._opponent_deck_count() == 0
     assert lc._opponent_fatigue_counter() >= 4, lc._opponent_fatigue_counter()
     assert lc.is_opponent_turn()
-    assert lc._opponent_upcoming_fatigue_damage() >= 4
+    assert lc._opponent_upcoming_fatigue_damage() == lc._opponent_fatigue_counter() + 1
     print("OK fatigue from battle-tag log", lc._opponent_fatigue_counter())
 
 
 if __name__ == "__main__":
     test_opponent_turn_fatigue_added_to_face()
-    test_local_turn_fatigue_not_counted()
+    test_opponent_turn_fatigue_zero_means_next_is_one()
+    test_local_turn_fatigue_counted_for_end_turn_lethal()
     test_opponent_turn_with_cards_in_deck_no_fatigue()
     test_opponent_deck_count_stable_while_entities_grow()
     test_fatigue_tag_from_battle_tag_power_log()
+    test_climactic_plus_fatigue_lethal_from_log()
     print("OK opponent fatigue lethal")

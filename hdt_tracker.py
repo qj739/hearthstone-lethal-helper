@@ -417,6 +417,12 @@ class HearthstoneTracker:
             opp_lethal_now=opp_lethal_now,
         )
 
+        # 场攻/总伤都不够时不弹斩杀（避免回合切换时残留缓存误报）
+        face_now = int(self.lethal_checker.cached_overlay_face() or 0)
+        if (prompt_lethal or show_lethal) and face_now <= 0 and total_damage <= 0:
+            prompt_lethal = False
+            show_lethal = False
+
         if (prompt_lethal or show_lethal) and not self.last_lethal_check:
             print("\n" + "🎯" * 30)
             print("⚔️  斩杀提示！检测到斩杀机会！ ⚔️")
@@ -808,6 +814,16 @@ class HearthstoneTracker:
                 else:
                     can_atk = "✓" if view.can_attack_hero else "✗"
                 print(f"  [{can_atk}] {card_name} ({stats})")
+        from hdt_python.location_board import get_board_locations, location_is_ready, location_durability
+        locs = get_board_locations(self.game_state, pid)
+        if locs:
+            print("\n我方地标:")
+            for loc in locs[:3]:
+                ready = "就绪" if location_is_ready(loc) else "冷却"
+                print(
+                    f"  [{ready}] {loc.card_id or '未知'} "
+                    f"(耐{location_durability(loc)})"
+                )
 
         # 显示手牌
         if my_hand:

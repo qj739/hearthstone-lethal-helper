@@ -64,7 +64,8 @@ _SPELL_OVERRIDES: Dict[str, _SpellSpec] = {
     "CORE_RLK_035": _SpellSpec("all_minions_aoe", 1, note="残骸递增v1单次"),
     "END_023": _SpellSpec("destroy_damaged_enemy", note="冻结邻接v1消灭受伤"),
     "END_028": _SpellSpec("destroy_atk_le", 4),
-    "REV_252": _SpellSpec("destroy_atk_le", 3, note="灌注v1按3攻"),
+    "REV_252": _SpellSpec("destroy_atk_le", 3, note="未注能≤3"),
+    "REV_252t": _SpellSpec("destroy_atk_le", 6, note="已注能≤6"),
     "RLK_025": _SpellSpec("minion_direct", 3),
     "REV_364": _SpellSpec("face_direct", 3, note="休眠种子v1仅3伤"),
     "CORE_BT_072": _SpellSpec("noop", note="冻结+水元素v1不计"),
@@ -668,7 +669,8 @@ def _board_registered(cid: str, board: dict) -> bool:
 def _register_spells(ids: List[str], cards: dict, zh: dict) -> None:
     sb = _sb()
     seen: set[str] = set()
-    for cid in ids:
+    # 缺口清单未必含注能 token（如 REV_252t）；覆盖表一并注册
+    for cid in list(dict.fromkeys([*ids, *_SPELL_OVERRIDES.keys()])):
         if cid in seen or _spell_registered(cid):
             continue
         seen.add(cid)
@@ -732,7 +734,7 @@ def _register_rush_cards(ids: List[str], cards: dict, zh: dict) -> None:
 
 def _register_weapons(ids: List[str], cards: dict, zh: dict) -> None:
     from .weapon_board import BOARD_WEAPON, _register_weapon
-    from .weapon_p0 import _equip, _weapon_stats_from_card
+    from .weapon_p0 import _card_has_windfury, _equip, _weapon_stats_from_card
     sb = _sb()
     seen: set[str] = set()
     for cid in ids:
@@ -743,12 +745,19 @@ def _register_weapons(ids: List[str], cards: dict, zh: dict) -> None:
         cost = int(card.get("cost", 0) or 0)
         name = zh.get(cid) or card.get("name") or cid
         atk = int(card.get("attack", 1) or 1)
-        dur = int(card.get("durability", 1) or 1)
-        note = _WEAPON_SPECIAL.get(cid, (atk, dur, "equip"))[2]
+        dur = int(card.get("durability") or card.get("health") or 1)
+        mechs = set(card.get("mechanics") or [])
+        has_wf = "WINDFURY" in mechs or "MEGA_WINDFURY" in mechs
+        note = _WEAPON_SPECIAL.get(
+            cid, (atk, dur, "equip+风怒" if has_wf else "equip"),
+        )[2]
 
-        def _weapon_fn(t, f, *, mult, card=None, _a=atk, _d=dur, _cid=cid, **_kw):
+        def _weapon_fn(
+            t, f, *, mult, card=None, _a=atk, _d=dur, _cid=cid, _wf=has_wf, **_kw,
+        ):
             wa, wd = _weapon_stats_from_card(card, _a, _d)
-            _equip(f, wa, wd, _cid, mult=mult, **_kw)
+            wf = _wf or _card_has_windfury(card)
+            _equip(f, wa, wd, _cid, mult=mult, windfury=wf, **_kw)
             return sb.SpellApplyResult()
 
         _register_weapon(sb.BoardSpellDef((cid,), cost, name, _weapon_fn))

@@ -45,10 +45,14 @@ _SPELL_OVERRIDES: Dict[str, _SpellSpec] = {
     # 灭绝圣物：仅敌方随从，不能打英雄；伤害随圣物强化写在脚本标签
     "REV_834": _SpellSpec("random_enemy_minion_hits", 1, amount2=2, uses_random=True),
     "CORE_REV_834": _SpellSpec("random_enemy_minion_hits", 1, amount2=2, uses_random=True),
-    "TIME_001": _SpellSpec("random_split_enemies", 6, uses_random=True, note="3×2随机"),
-    "TIME_441": _SpellSpec("random_split_enemies", 8, uses_random=True, note="Rewind 4×2"),
+    # 飞刀/光束：多次定点随机，默认可重复命中同一目标
+    "TIME_001": _SpellSpec("random_enemy_hits", 2, amount2=3, uses_random=True, note="3刀×2"),
+    # 永世裂痕：对两个敌人各 4 伤，不可打同一目标两次（空场仅 4 脸）
+    "TIME_441": _SpellSpec(
+        "random_distinct_enemy_hits", 4, amount2=2, uses_random=True, note="两敌人各4",
+    ),
     "TIME_027": _SpellSpec("random_split_enemies", 6, uses_random=True),
-    "ETC_528": _SpellSpec("random_split_enemies", 4, uses_random=True, note="2束×2"),
+    "ETC_528": _SpellSpec("random_enemy_hits", 2, amount2=2, uses_random=True, note="2束×2"),
     "CORE_BAR_311": _SpellSpec("random_split_enemies", 4, uses_random=True),
     "ONY_011": _SpellSpec("random_split_enemies", 10, uses_random=True),
     "TOY_714": _SpellSpec("enemy_aoe", 1, note="每条龙重复"),
@@ -476,13 +480,32 @@ def _make_spell_apply(spec: _SpellSpec) -> Callable:
     if kind == "all_other_minions":
         return lambda t, f, *, mult, **_kw: _apply_all_minions_aoe_spell(t, f, amt * mult)
     if kind == "random_split_enemies":
-        # 「敌人」含敌方英雄（永世裂痕 / 奥术飞弹类）；不含英雄会漏算打脸且乐观解场误报敌斩
-        def _rs(t, f, *, mult, enemy_shield, rng=None, **_kw):
+        # 「敌人」含敌方英雄（逐点分摊，如超子弹幕）；可重复命中同一目标
+        def _rs(t, f, *, mult, enemy_shield, rng=None, spell_power=0, **_kw):
+            from .spell_board import scaled_spell_damage as _sd
             return _apply_random_split_damage(
-                t, f, amt * mult, enemy_shield=enemy_shield, rng=rng,
+                t, f, _sd(amt, mult=mult, spell_power=spell_power),
+                enemy_shield=enemy_shield, rng=rng,
                 include_enemy_hero=True,
             )
         return _rs
+    if kind in ("random_enemy_hits", "random_distinct_enemy_hits"):
+        # amount=单次伤害, amount2=次数；distinct 版不重复目标（永世裂痕）
+        from .spell_board import _apply_random_enemy_hits, scaled_spell_damage as _sd
+        distinct = kind == "random_distinct_enemy_hits"
+        hits = amt2 if amt2 > 0 else 1
+
+        def _reh_all(t, f, *, mult, enemy_shield, rng=None, spell_power=0, **_kw):
+            return _apply_random_enemy_hits(
+                t, f,
+                hits=hits * max(int(mult), 1),
+                damage=_sd(amt, mult=mult, spell_power=spell_power),
+                enemy_shield=enemy_shield,
+                rng=rng,
+                distinct_targets=distinct,
+            )
+
+        return _reh_all
     if kind == "destroy_enemy":
         return _apply_optimal_destroy_enemy
     if kind == "destroy_any":

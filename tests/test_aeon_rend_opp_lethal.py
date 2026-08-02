@@ -63,14 +63,14 @@ def test_aeon_rend_random_not_certain_opp_lethal():
 
 
 def test_random_split_enemies_can_hit_hero():
-    """永世裂痕等 random_split_enemies 目标含敌方英雄。"""
+    """永世裂痕可打英雄；空场仅一击 4 伤（不重复目标）。"""
     from hdt_python.spell_board import get_board_spell_def
     import random
 
     defn = get_board_spell_def("TIME_441")
     assert defn is not None and defn.uses_random
     res = defn.apply([], [], mult=1, enemy_shield=False, rng=random.Random(0))
-    assert res.direct_face_damage > 0, res.direct_face_damage
+    assert res.direct_face_damage == 4, res.direct_face_damage
     print("OK TIME_441 can hit hero", res.direct_face_damage)
 
 

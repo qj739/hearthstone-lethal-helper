@@ -1319,17 +1319,101 @@ class LethalChecker:
 
     @staticmethod
     def _stolen_minion_face(fighters: List[dict], defender_shield: bool = False) -> int:
-        """疯狂药水等偷来的随从打脸：计入法术分项，不算场面随从。"""
-        stolen_fs = [
-            f for f in fighters
-            if f.get("kind") == "minion" and f.get("stolen_turn")
-        ]
-        return LethalChecker._fighters_face_damage(stolen_fs, defender_shield)
+        """疯狂药水等偷来的随从打脸：计入法术分项，不算场面随从。
+
+        与场面随从共用武器攻击后 buff（求真之锤等），避免只对偷来的随从单独枚举漏增益。
+        """
+        _m, _w, _h, _hp, stolen_hits = LethalChecker._face_hit_buckets(fighters)
+        return apply_divine_shield_to_hits(stolen_hits, defender_shield)
 
     @staticmethod
     def _category_face_hits(fighters: List[dict]) -> List[int]:
         """单类攻击者的打脸命中列表（不含圣盾）。"""
         hits = list(LethalChecker._fighters_face_hits(fighters))
+        for f in fighters:
+            if f.get("kind") != "weapon" or f.get("health", 0) <= 0:
+                continue
+            if not f.get("can_face", True):
+                continue
+            aoe = int(f.get("hero_aoe_on_attack", 0) or 0)
+            if aoe <= 0:
+                continue
+            n = min(f.get("attacks_left", 0), f.get("durability", 0))
+            hits.extend([aoe] * n)
+        return hits
+
+    @staticmethod
+    def _face_hit_buckets(
+        fighters: List[dict],
+    ) -> Tuple[List[int], List[int], List[int], List[int], List[int]]:
+        """按来源拆打脸命中：(场面随从, 武器, 法术英雄攻, 英雄技能, 偷来的随从)。
+
+        武器挥击后的友方增益（求真之锤等）先作用于随从拷贝，再算随从打脸；
+        不可对随从/武器分项各自独立枚举（否则会漏掉攻击后 buff）。
+        """
+        from .combat_sim import _friendly_taunt_blocks_face, _normalize_fighters
+        from .rush_combat import simulate_minion_face_hits
+        from .weapon_p0 import apply_after_attack_friendly_buffs
+
+        empty: Tuple[List[int], List[int], List[int], List[int], List[int]] = (
+            [], [], [], [], [],
+        )
+        normed = _normalize_fighters(fighters)
+        if _friendly_taunt_blocks_face(normed):
+            return empty
+
+        minion_fs: List[dict] = []
+        minion_meta: List[str] = []
+        for f in normed:
+            if f.get("kind") != "minion":
+                continue
+            if f.get("health", 0) <= 0 or f.get("attacks_left", 0) <= 0:
+                continue
+            if not f.get("can_face", True):
+                continue
+            minion_fs.append(dict(f))
+            if f.get("from_hero_power"):
+                minion_meta.append("hp")
+            elif f.get("stolen_turn"):
+                minion_meta.append("stolen")
+            else:
+                minion_meta.append("board")
+
+        weapon_hits: List[int] = []
+        hero_buff_hits: List[int] = []
+        hp_hits: List[int] = []
+        for f in normed:
+            if f.get("kind") == "minion":
+                continue
+            if not f.get("can_face", True):
+                continue
+            attacks_left = f.get("attacks_left", 0)
+            if f.get("health", 0) <= 0 or attacks_left <= 0:
+                continue
+            if f.get("kind") == "weapon":
+                n = min(attacks_left, f.get("durability", 0))
+            else:
+                n = attacks_left
+            for _ in range(n):
+                if f.get("from_hero_power"):
+                    hp_hits.append(f["atk"])
+                elif f.get("kind") == "weapon":
+                    weapon_hits.append(f["atk"])
+                    apply_after_attack_friendly_buffs(f, minion_fs)
+                else:
+                    hero_buff_hits.append(f["atk"])
+
+        board_fs = [m for m, meta in zip(minion_fs, minion_meta) if meta == "board"]
+        hp_minion_fs = [m for m, meta in zip(minion_fs, minion_meta) if meta == "hp"]
+        stolen_fs = [m for m, meta in zip(minion_fs, minion_meta) if meta == "stolen"]
+        minion_hits = list(simulate_minion_face_hits(board_fs))
+        hp_hits.extend(simulate_minion_face_hits(hp_minion_fs))
+        stolen_hits = list(simulate_minion_face_hits(stolen_fs))
+        return minion_hits, weapon_hits, hero_buff_hits, hp_hits, stolen_hits
+
+    @staticmethod
+    def _weapon_aoe_face_hits(fighters: List[dict]) -> List[int]:
+        hits: List[int] = []
         for f in fighters:
             if f.get("kind") != "weapon" or f.get("health", 0) <= 0:
                 continue
@@ -1349,28 +1433,14 @@ class LethalChecker:
         对手英雄圣盾只破一次：必须合并所有命中后再扣最小一击，
         不可对随从/武器分项各自扣圣盾（否则会重复浪费破盾）。
         """
-        minion_fs = [
-            f for f in fighters
-            if f.get("kind") == "minion"
-            and not f.get("from_hero_power")
-            and not f.get("stolen_turn")
-        ]
-        weapon_fs = [f for f in fighters if f.get("kind") == "weapon"]
-        hero_buff_fs = [
-            f for f in fighters
-            if f.get("kind") == "hero" and not f.get("from_hero_power")
-        ]
-        hp_fs = [f for f in fighters if f.get("from_hero_power")]
         from .rush_combat import inquisitor_face_mirror_hits
 
-        # 跟刀按全场英雄挥击次数计，并入随从分项
-        minion_hits = (
-            LethalChecker._category_face_hits(minion_fs)
-            + inquisitor_face_mirror_hits(fighters, [])
+        minion_hits, weapon_hits, hero_buff_hits, hp_hits, _stolen = (
+            LethalChecker._face_hit_buckets(fighters)
         )
-        weapon_hits = LethalChecker._category_face_hits(weapon_fs)
-        hero_buff_hits = LethalChecker._category_face_hits(hero_buff_fs)
-        hp_hits = LethalChecker._category_face_hits(hp_fs)
+        weapon_hits = list(weapon_hits) + LethalChecker._weapon_aoe_face_hits(fighters)
+        # 跟刀按全场英雄挥击次数计，并入随从分项
+        minion_hits = list(minion_hits) + inquisitor_face_mirror_hits(fighters, [])
 
         buckets = [minion_hits, weapon_hits, hero_buff_hits, hp_hits]
         if not defender_shield:
@@ -4399,42 +4469,13 @@ class LethalChecker:
 
     @staticmethod
     def _fighters_face_hits(fighters: List[dict]) -> List[int]:
-        from .combat_sim import _friendly_taunt_blocks_face, _normalize_fighters
-        from .rush_combat import simulate_minion_face_hits
-        from .weapon_p0 import apply_after_attack_friendly_buffs
-
-        normed = _normalize_fighters(fighters)
-        if _friendly_taunt_blocks_face(normed):
-            return []
-        hits: List[int] = []
-        # 拷贝可打脸随从：武器挥击后的友方 buff 只影响本次打脸估算
-        minion_fs: List[dict] = []
-        for f in normed:
-            if f.get("kind") != "minion":
-                continue
-            if f.get("health", 0) <= 0 or f.get("attacks_left", 0) <= 0:
-                continue
-            if not f.get("can_face", True):
-                continue
-            minion_fs.append(dict(f))
-        for f in normed:
-            if f.get("kind") == "minion":
-                continue
-            if not f.get("can_face", True):
-                continue
-            attacks_left = f.get("attacks_left", 0)
-            if f.get("health", 0) <= 0 or attacks_left <= 0:
-                continue
-            if f.get("kind") == "weapon":
-                n = min(attacks_left, f.get("durability", 0))
-            else:
-                n = attacks_left
-            for _ in range(n):
-                hits.append(f["atk"])
-                if f.get("kind") == "weapon":
-                    apply_after_attack_friendly_buffs(f, minion_fs)
-        hits.extend(simulate_minion_face_hits(minion_fs))
-        return hits
+        """无嘲讽打脸命中（含武器攻击后友方 buff；不含武器 AOE / 审判官跟刀）。"""
+        minion_hits, weapon_hits, hero_buff_hits, hp_hits, stolen_hits = (
+            LethalChecker._face_hit_buckets(fighters)
+        )
+        return (
+            list(weapon_hits) + hero_buff_hits + hp_hits + minion_hits + stolen_hits
+        )
 
     @staticmethod
     def _fighters_face_damage(
@@ -4447,20 +4488,9 @@ class LethalChecker:
         from .rush_combat import inquisitor_face_mirror_hits
 
         base_hits = LethalChecker._fighters_face_hits(fighters)
+        hits = list(base_hits) + LethalChecker._weapon_aoe_face_hits(fighters)
         if include_inquisitor_mirror:
-            hits = list(inquisitor_face_mirror_hits(fighters, base_hits))
-        else:
-            hits = list(base_hits)
-        for f in fighters:
-            if f.get("kind") != "weapon" or f.get("health", 0) <= 0:
-                continue
-            if not f.get("can_face", True):
-                continue
-            aoe = int(f.get("hero_aoe_on_attack", 0) or 0)
-            if aoe <= 0:
-                continue
-            n = min(f.get("attacks_left", 0), f.get("durability", 0))
-            hits.extend([aoe] * n)
+            hits = list(inquisitor_face_mirror_hits(fighters, hits))
         return apply_divine_shield_to_hits(hits, defender_shield)
 
     @staticmethod

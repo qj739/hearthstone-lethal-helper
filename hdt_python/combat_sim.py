@@ -342,11 +342,19 @@ def exhaust_rush_on_enemy_minions(
                 )
                 if r2 is None or t2 is None or t2.get("health", 0) <= 0:
                     continue
+                was_alive_before = t2.get("health", 0) > 0
                 apply_single_attack(r2, t2)
                 _sync_minion_death_on_boards(r2, t2, fs2, board2)
-                # 影犬等：突袭换随从也要触发「攻击后其他野兽 +2/+2」
-                from .rush_combat import apply_buff_other_beasts_after_attack
+                # 顺劈/溅射/影犬等：与 lethal_checker._apply_single_attack 一致
+                # （旧逻辑只用 apply_single_attack，镂骨恶犬等漏掉相邻嘲讽）
+                from .rush_combat import (
+                    apply_buff_other_beasts_after_attack,
+                    apply_rush_attack_side_effects,
+                )
 
+                apply_rush_attack_side_effects(
+                    r2, t2, board2, fs2, was_alive_before=was_alive_before,
+                )
                 apply_buff_other_beasts_after_attack(r2, fs2)
                 if score_after is not None:
                     # 评分不得污染候选局面（否则后续攻击会在已被评分吞掉的状态上继续）

@@ -167,6 +167,44 @@ def _adjacent_living(enemy_board: List[dict], target: dict) -> List[dict]:
     return out
 
 
+def apply_rush_attack_side_effects(
+    fighter: dict,
+    target: dict,
+    enemy_board: List[dict],
+    fighters: List[dict],
+    *,
+    was_alive_before: bool,
+) -> int:
+    """突袭换随从后的顺劈/溅射（不依赖 LethalChecker；供 combat_sim 调用）。
+
+    返回敌方随从吸血回血（相邻目标带吸血时）。
+    """
+    from .deathrattle import resolve_minion_death, remove_dead_taunts
+    from .spell_board import _apply_damage
+
+    extra_heal = 0
+    atk = int(fighter.get("atk", 0) or 0)
+    if fighter.get("cleave") and atk > 0:
+        for adj in _adjacent_living(enemy_board, target):
+            extra_heal += _apply_damage(
+                adj, atk, taunts=enemy_board, fighters=fighters,
+            )
+        remove_dead_taunts(enemy_board)
+
+    if fighter.get("splash_other_minions") and was_alive_before and atk > 0:
+        t_eid = target.get("entity_id")
+        for other in list(enemy_board):
+            if other.get("entity_id") == t_eid or other.get("health", 0) <= 0:
+                continue
+            if other.get("kind") == "hero":
+                continue
+            other["health"] = other.get("health", 0) - atk
+            if other.get("health", 0) <= 0:
+                resolve_minion_death(other, enemy_board, fighters)
+        remove_dead_taunts(enemy_board)
+    return extra_heal
+
+
 def _apply_damage_to_unit(
     checker: "LethalChecker",
     fighter: dict,
@@ -196,37 +234,16 @@ def after_minion_attack(
     was_alive_before: bool,
 ) -> int:
     """随从攻击随从后的触发（顺劈 / 德拉克雷斯 / 暴怒式加攻 / 杀怪再攻）。"""
-    from .deathrattle import on_minion_died, remove_dead_taunts
-
     extra_heal = 0
-    atk = fighter.get("atk", 0)
 
     if fighter.get("hero_atk_on_attack"):
         _add_temp_hero_attack(fighters, int(fighter["hero_atk_on_attack"]))
 
-    if fighter.get("cleave") and atk > 0:
-        from .spell_board import _apply_damage
-
-        for adj in _adjacent_living(enemy_board, target):
-            extra_heal += _apply_damage(
-                adj, atk, taunts=enemy_board, fighters=fighters,
-            )
-        from .deathrattle import remove_dead_taunts
-        remove_dead_taunts(enemy_board)
-
-    if fighter.get("splash_other_minions") and was_alive_before and atk > 0:
-        from .deathrattle import resolve_minion_death, remove_dead_taunts
-
-        t_eid = target.get("entity_id")
-        for other in list(enemy_board):
-            if other.get("entity_id") == t_eid or other.get("health", 0) <= 0:
-                continue
-            if other.get("kind") == "hero":
-                continue
-            other["health"] = other.get("health", 0) - atk
-            if other.get("health", 0) <= 0:
-                resolve_minion_death(other, enemy_board, fighters)
-        remove_dead_taunts(enemy_board)
+    if fighter.get("cleave") or fighter.get("splash_other_minions"):
+        extra_heal += apply_rush_attack_side_effects(
+            fighter, target, enemy_board, fighters,
+            was_alive_before=was_alive_before,
+        )
 
     if (
         fighter.get("attack_again_on_kill")

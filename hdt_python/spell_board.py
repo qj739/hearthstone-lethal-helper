@@ -689,21 +689,24 @@ def _effective_health(unit: dict) -> int:
     return max(int(unit.get("health", 0) or 0), 0)
 
 
-def _pick_lowest_unit(units: List[dict]) -> Optional[dict]:
+def _pick_lowest_unit(
+    units: List[dict],
+    rng: Optional[random.Random] = None,
+) -> Optional[dict]:
     alive = [
         u for u in units
         if u.get("kind") == "hero" or _effective_health(u) > 0
     ]
     if not alive:
         return None
-    # 并列最低血时优先英雄（与回合结束「攻击最低血敌人」、斩杀先攻压血一致）
-    return min(
-        alive,
-        key=lambda u: (
-            _effective_health(u),
-            0 if u.get("kind") == "hero" else 1,
-        ),
-    )
+    lowest = min(_effective_health(u) for u in alive)
+    tied = [u for u in alive if _effective_health(u) == lowest]
+    # 并列最低血时实战随机；无 rng 时不偏英雄，避免误报 100% 打脸斩杀
+    if len(tied) == 1:
+        return tied[0]
+    if rng is not None:
+        return rng.choice(tied)
+    return next((u for u in tied if u.get("kind") != "hero"), tied[0])
 
 
 def board_enables_lowest_hit_face_lethal(
@@ -718,7 +721,7 @@ def board_enables_lowest_hit_face_lethal(
 
     1) 先看：场攻 + 该伤害 是否足以斩杀；
     2) 若可以：再看出不打出该牌、仅用场攻打脸，能否把敌方英雄压到
-       （并列也算）生命值最低；
+       **严格**生命值最低（并列不算，实战随机，非 100%）；
     3) 两者皆可 ⇒ 可用该牌打脸斩杀。
     """
     board = max(0, int(board_face or 0))
@@ -729,14 +732,14 @@ def board_enables_lowest_hit_face_lethal(
     # 1) 加上这 N 点能不能杀
     if board + hit < opp:
         return False
-    # 2) 不出该牌：场攻全打脸后，英雄是否成为最低血敌人
+    # 2) 不出该牌：场攻全打脸后，英雄是否成为唯一最低血敌人
     living = [max(0, int(h)) for h in enemy_minion_healths if int(h or 0) > 0]
     hero_after = opp - board
     if hero_after <= 0:
         return True
     if not living:
         return True
-    return hero_after <= min(living)
+    return hero_after < min(living)
 
 
 def _living_enemy_units(
@@ -805,6 +808,7 @@ def _apply_lowest_enemy_hits(
     hits: int,
     enemy_shield: bool,
     self_lifesteal: bool = False,
+    rng: Optional[random.Random] = None,
     **kw,
 ) -> SpellApplyResult:
     gs = kw.get("gs")
@@ -815,12 +819,13 @@ def _apply_lowest_enemy_hits(
         else _resolve_opponent_hero_hp(gs, player_id)
     )
     shield = enemy_shield
+    roll = rng if rng is not None else kw.get("rng")
     res = SpellApplyResult()
     for _ in range(hits):
         units = _living_enemy_units(
             taunts, shield, spell_targetable_only=True, hero_hp=hero_hp,
         )
-        target = _pick_lowest_unit(units)
+        target = _pick_lowest_unit(units, rng=roll)
         if target is None:
             break
         heal, face, dealt = _apply_damage_to_unit(
@@ -847,12 +852,13 @@ def _apply_split_to_lowest(
     total_damage: int,
     *,
     enemy_shield: bool,
+    rng: Optional[random.Random] = None,
 ) -> SpellApplyResult:
     res = SpellApplyResult()
     remaining = total_damage
     while remaining > 0:
         units = _living_enemy_units(taunts, enemy_shield, spell_targetable_only=True)
-        target = _pick_lowest_unit(units)
+        target = _pick_lowest_unit(units, rng=rng)
         if target is None:
             break
         heal, face, _ = _apply_damage_to_unit(

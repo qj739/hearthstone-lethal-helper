@@ -64,14 +64,13 @@ def _hand_bc(gs, eid, pid, card_id, cost):
 
 
 def test_board_enables_lowest_hit_face_lethal_helper():
-    """算法单元：1) 场攻+3 够斩；2) 场攻能把英雄压到最低血。"""
-    # 4 血、随从 2 血、场攻 3：3+3>=4 且 4-3=1 <= 2 → 可斩
+    """算法单元：1) 场攻+3 够斩；2) 场攻能把英雄压到严格最低血。"""
+    # 4 血、随从 2 血、场攻 3：3+3>=4 且 4-3=1 < 2 → 可斩
     assert board_enables_lowest_hit_face_lethal(
         board_face=3, opponent_hp=4, enemy_minion_healths=[5, 2, 3], hit_damage=3,
     )
-    # 场攻只有 2：打脸后英雄仍 2，与套娃并列最低，但 2+3>=4；
-    # 全打脸后 hero=2 <= min=2 → 仍可（并列优先英雄）
-    assert board_enables_lowest_hit_face_lethal(
+    # 场攻只有 2：打脸后英雄仍 2，与套娃并列最低 → 非 100%（随机），不可当确定斩
+    assert not board_enables_lowest_hit_face_lethal(
         board_face=2, opponent_hp=4, enemy_minion_healths=[5, 2, 3], hit_damage=3,
     )
     # 场攻+3 不够斩
@@ -84,6 +83,38 @@ def test_board_enables_lowest_hit_face_lethal_helper():
     )
     print("OK lowest-hit lethal helper")
 
+
+def test_ball_hog_tied_lowest_not_guaranteed_lethal():
+    """
+    对手英雄与随从同为 2 血：球霸战吼并列随机，不能当 100% 斩杀。
+    场攻 0 + 球霸 3 → 仅当打中英雄才斩；约 1/2，不应确定 lethal。
+    """
+    assert get_battlecry_def("TOY_642") is not None
+    assert get_battlecry_def("TOY_642").uses_random
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.active_player_id = 1
+    gs.in_game = True
+    _hero(gs, 1, 1, mana=10)
+    _hero(gs, 2, 2, hp=30, dmg=28)  # 2 血
+    _minion(gs, 20, 2, 3, 2, card_id="TOY_893")
+    _hand_bc(gs, 30, 1, "TOY_642", 4)
+
+    assert not board_enables_lowest_hit_face_lethal(
+        board_face=0, opponent_hp=2, enemy_minion_healths=[2], hit_damage=3,
+    )
+
+    lc = LethalChecker(gs)
+    lc.overlay_board_face_damage()
+    face, prob, uses_random, _ = lc.overlay_face_stats()
+    assert uses_random, (
+        f"tied lowest should be treated as random, face={face} prob={prob}"
+    )
+    assert prob < 1.0 - 1e-6, (
+        f"tied 2hp must not be 100% lethal, face={face} prob={prob}"
+    )
+    print("OK ball hog tied lowest", face, prob, uses_random)
 
 def test_ball_hog_attack_first_then_face_lethal():
     """
@@ -99,6 +130,13 @@ def test_ball_hog_attack_first_then_face_lethal():
     gs.in_game = True
     _hero(gs, 1, 1, mana=10)
     _hero(gs, 2, 2, hp=30, dmg=26)  # 4 血
+    # 避免空牌库疲劳把搜索阈值压到 3，导致「仅场攻」被当成已斩而跳过球霸随机线
+    for i, eid in enumerate(range(100, 105)):
+        e = gs.get_entity(eid)
+        e.controller = 2
+        e.zone = "DECK"
+        e.card_id = f"DECK_{i}"
+        e.tags["ZONE"] = "DECK"
     _minion(gs, 10, 1, 3, 3, card_id="REV_244", turns=1)
     _minion(gs, 20, 2, 5, 5, card_id="END_015")
     _minion(gs, 21, 2, 3, 2, card_id="TOY_893")
@@ -144,4 +182,5 @@ def test_ball_hog_attack_first_then_face_lethal():
 
 if __name__ == "__main__":
     test_board_enables_lowest_hit_face_lethal_helper()
+    test_ball_hog_tied_lowest_not_guaranteed_lethal()
     test_ball_hog_attack_first_then_face_lethal()

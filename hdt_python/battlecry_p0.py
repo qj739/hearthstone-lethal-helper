@@ -1199,7 +1199,8 @@ def _register_p0_battlecry() -> None:
         (("TOY_101",), 5, "暗夜精灵女猎手", _apply_night_elf_huntress, False),
         (("ETC_209",), 3, "硬核信徒", _apply_hardcore_cultist, False),
         (("TTN_457",), 3, "悼词宣诵者", _apply_eulogizer, False),
-        (("TOY_642",), 4, "球霸野猪人", _apply_ball_hog, False),
+        # 最低血并列时随机目标，须走 MC 概率（勿标确定斩）
+        (("TOY_642",), 4, "球霸野猪人", _apply_ball_hog, True),
         (("TID_716",), 8, "潮汐亡魂", _apply_tidal_revenant, False),
         (("TTN_456",), 2, "蔽刺触手", _apply_thornveil, True),
         (("RLK_915",), 3, "琥珀雏龙", _apply_amber_whelp, False),

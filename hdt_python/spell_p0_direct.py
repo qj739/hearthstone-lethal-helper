@@ -269,27 +269,28 @@ def _apply_swipe(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw) 
 def _apply_fel_barrage(taunts, fighters, *, mult, enemy_shield, spell_power=0, rng=None, **_kw) -> SpellApplyResult:
     return _apply_lowest_enemy_hits(
         taunts, fighters, _sd(2, mult=mult, spell_power=spell_power), hits=2,
-        enemy_shield=enemy_shield, **_kw,
+        enemy_shield=enemy_shield, rng=rng, **_kw,
     )
 
 
 def _apply_fan_the_hammer(taunts, fighters, *, mult, enemy_shield, spell_power=0, rng=None, **_kw) -> SpellApplyResult:
     return _apply_split_to_lowest(
-        taunts, fighters, _sd(6, mult=mult, spell_power=spell_power), enemy_shield=enemy_shield,
+        taunts, fighters, _sd(6, mult=mult, spell_power=spell_power),
+        enemy_shield=enemy_shield, rng=rng,
     )
 
 
 def _apply_lava_flow(taunts, fighters, *, mult, enemy_shield, spell_power=0, rng=None, **_kw) -> SpellApplyResult:
     return _apply_lowest_enemy_hits(
         taunts, fighters, _sd(2, mult=mult, spell_power=spell_power), hits=3,
-        enemy_shield=enemy_shield, **_kw,
+        enemy_shield=enemy_shield, rng=rng, **_kw,
     )
 
 
 def _apply_renewing_flames(taunts, fighters, *, mult, enemy_shield, spell_power=0, rng=None, **_kw) -> SpellApplyResult:
     return _apply_lowest_enemy_hits(
         taunts, fighters, _sd(5, mult=mult, spell_power=spell_power), hits=2,
-        enemy_shield=enemy_shield, self_lifesteal=True, **_kw,
+        enemy_shield=enemy_shield, self_lifesteal=True, rng=rng, **_kw,
     )
 
 
@@ -525,10 +526,10 @@ def _register_p0_direct() -> None:
         (("CORE_CATA_007",), 4, "吞噬", _apply_consumption, True),
         (("AV_259",), 2, "冰霜撕咬", _apply_frostbite, False),
         (("RLK_512",), 3, "冰川突进", _apply_glacial_advance, False),
-        (("SW_040",), 2, "邪能弹幕", _apply_fel_barrage, False),
+        (("SW_040",), 2, "邪能弹幕", _apply_fel_barrage, True),
         (("CORE_AT_064",), 2, "怒袭", _apply_bash, False),
         (("CORE_CS2_062",), 3, "地狱烈焰", _apply_hellfire, False),
-        (("WW_405",), 4, "迅疾连射", _apply_fan_the_hammer, False),
+        (("WW_405",), 4, "迅疾连射", _apply_fan_the_hammer, True),
         (("TIME_855",), 3, "奥术弹幕", _apply_arcane_barrage, True),
         (("GDB_851",), 2, "星域相变射线", _apply_astral_phaser, True),
         (("CATA_485",), 1, "激寒急流", _apply_sleet_storm, True),
@@ -542,8 +543,8 @@ def _register_p0_direct() -> None:
         (("CS2_012", "CORE_CS2_012"), 3, "横扫", _apply_swipe, False),
         (("FIR_909",), 2, "爆裂射击", _apply_bursting_shot, True),
         (("FIR_910",), 3, "灼烧之风", _apply_scorching_winds, False),
-        (("TLC_227",), 3, "熔岩涌流", _apply_lava_flow, False),
-        (("EDR_255",), 7, "复苏烈焰", _apply_renewing_flames, False),
+        (("TLC_227",), 3, "熔岩涌流", _apply_lava_flow, True),
+        (("EDR_255",), 7, "复苏烈焰", _apply_renewing_flames, True),
         (("JAM_002",), 5, "星辰能量", _apply_star_power, True),
         (("AV_212",), 2, "法力虹吸", _apply_siphon_mana, False),
         (("RLK_843",), 1, "奥术箭", _apply_arcane_arrow, False),

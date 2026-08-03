@@ -173,11 +173,21 @@ def _effective_health(unit: dict) -> int:
     return max(int(unit.get("health", 0) or 0), 0)
 
 
-def _pick_lowest(units: List[dict]) -> Optional[dict]:
+def _pick_lowest(
+    units: List[dict],
+    rng: Optional[random.Random] = None,
+) -> Optional[dict]:
     alive = [u for u in units if _effective_health(u) > 0]
     if not alive:
         return None
-    return min(alive, key=_effective_health)
+    lowest = min(_effective_health(u) for u in alive)
+    tied = [u for u in alive if _effective_health(u) == lowest]
+    if len(tied) == 1:
+        return tied[0]
+    if rng is not None:
+        return rng.choice(tied)
+    # 并列时不偏英雄，避免亡语误报确定打脸
+    return next((u for u in tied if u.get("kind") != "hero"), tied[0])
 
 
 def _next_enemy_entity_id(enemy_board: List[dict], fighters: List[dict]) -> int:
@@ -421,7 +431,13 @@ def on_minion_died(
                     "health": enemy_hero_hp,
                     "shield": enemy_shield,
                 })
-        target = _pick_lowest(pool)
+        # 并列最低血时随机
+        alive = [u for u in pool if _effective_health(u) > 0]
+        if len(alive) >= 2:
+            lo = min(_effective_health(u) for u in alive)
+            if sum(1 for u in alive if _effective_health(u) == lo) > 1:
+                result.uses_random = True
+        target = _pick_lowest(pool, rng=r)
         if target is not None:
             if target.get("kind") == "hero":
                 from .board_damage import apply_divine_shield_to_hits

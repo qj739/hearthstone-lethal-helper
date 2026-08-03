@@ -219,6 +219,66 @@ def test_board_face_includes_buff():
     print("OK board face with buff", face)
 
 
+def _hand_weapon(gs, eid, pid, card_id="JAIL_329", atk=3, dur=3, cost=7):
+    w = gs.get_entity(eid)
+    w.cardtype = "WEAPON"
+    w.card_id = card_id
+    w.controller = pid
+    w.zone = "HAND"
+    w.atk = atk
+    w.health = dur
+    w.tags["ZONE"] = "HAND"
+    w.tags["ATK"] = atk
+    w.tags["479"] = atk
+    w.tags["DURABILITY"] = dur
+    w.tags["COST"] = cost
+    w.tags["ZONE_POSITION"] = 1
+    return w
+
+
+def test_hand_truth_seeker_lethal_before_equip():
+    """求真之锤在手牌时就应识别斩杀（装备→挥锤→圣骑+2），无需先装备。"""
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.active_player_id = 1
+    gs.in_game = True
+    _hero(gs, 1, 1, atk479=0)
+    hero = gs.get_entity(1)
+    hero.tags["RESOURCES"] = 10
+    hero.tags["RESOURCES_USED"] = 0
+    _hero(gs, 2, 2, hp=30, dmg=19)  # 11 血
+    _minion(gs, 10, 1, 2, 2)
+    _minion(gs, 11, 1, 2, 2)
+    _hand_weapon(gs, 40, 1)
+
+    checker = LethalChecker(gs)
+    # 搜索路径经 _face_parts_from_fighters；修复前只有 7（漏 buff）
+    fs = checker._build_fighters(gs.get_overlay_board(1), 1)
+    from hdt_python.spell_board import apply_spell_sequence
+    from hdt_python.weapon_board import get_weapon_def
+    from copy import deepcopy
+
+    card = gs.get_entity(40)
+    defn = get_weapon_def("JAIL_329")
+    assert defn is not None
+    fs2 = deepcopy(fs)
+    apply_spell_sequence(
+        [], fs2, [(defn, 7, card)], spell_mult=1, enemy_shield=False,
+        gs=gs, player_id=1, mana_budget=10,
+    )
+    parts = checker._face_parts_from_fighters(fs2, 0, 0, False)
+    assert parts[0] >= 11, parts
+    assert parts[0] == LethalChecker._fighters_face_damage(fs2), (
+        parts, LethalChecker._fighters_face_damage(fs2),
+    )
+
+    total, _, is_lethal = checker.calculate_lethal_potential()
+    assert total >= 11, total
+    assert is_lethal, (total, is_lethal)
+    print("OK hand Truth Seeker lethal before equip", total)
+
+
 if __name__ == "__main__":
     test_truth_seeker_registered()
     test_equipped_stamps_all_paladin_buff()
@@ -226,4 +286,5 @@ if __name__ == "__main__":
     test_face_hits_include_buff_after_weapon_swing()
     test_truth_seeker_lethal_vs_11_hp()
     test_board_face_includes_buff()
+    test_hand_truth_seeker_lethal_before_equip()
     print("ALL PASS")

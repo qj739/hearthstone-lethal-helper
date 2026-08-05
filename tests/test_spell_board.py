@@ -2608,6 +2608,95 @@ def test_p0_red_card_two_taunts_face():
     print("OK p0 red card two taunts", total)
 
 
+def test_p0_red_card_battlefiend_hero_attack_lethal():
+    """红牌休眠圣盾嘲讽 + 恶魔之爪解幼龙：英雄攻击后战斗邪犬+1，与虚无行者斩 8 血。
+
+    复盘 2026-08-05：吵吵(圣盾嘲讽)+时序幼龙(3/5嘲讽)，对手 8 血。
+    """
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.active_player_id = 1
+    gs.in_game = True
+    h = _hero(gs, 1, 1, mana=7, used=5)
+    h.tags["ATK"] = 2
+    h.tags["479"] = 2
+    opp = _hero(gs, 2, 2)
+    opp.health = 8
+    opp.damage = 22
+    # 团队之灵：英雄已有 +2；随从牌面不含光环
+    spirit = _minion(gs, 10, 1, 0, 3, card_id="TOY_028")
+    spirit.tags["AURA"] = 1
+    _minion(gs, 11, 1, 2, 2, card_id="JAIL_734")
+    _minion(gs, 12, 1, 3, 3, card_id="CORE_BT_351")
+    _minion(gs, 13, 1, 4, 1, card_id="CORE_BT_321")
+    annoy = _minion(gs, 20, 2, 2, 4, taunt=True, card_id="CORE_GVG_085")
+    annoy.tags["DIVINE_SHIELD"] = 1
+    _minion(gs, 21, 2, 3, 5, taunt=True, card_id="TIME_700t")
+    _hand_spell(gs, 30, 1, "TOY_644", 1)
+    _hero_power(gs, 40, 1, "HERO_10bp", cost=1)
+
+    checker = LethalChecker(gs)
+    total = checker.overlay_board_face_damage()
+    note = checker.overlay_spell_note() or ""
+    assert "红牌" in note, note
+    assert total >= 8, f"expected >=8 face (battlefiend +1), got {total} note={note}"
+    _, _, lethal = checker.calculate_lethal_potential()
+    assert lethal, (total, note)
+    print("OK p0 red card battlefiend lethal", total, note)
+
+
+def test_p0_imprisoned_vilefiend_dormant_no_rush_face():
+    """被禁锢的邪犬打出后休眠，不得按突袭计入本回合场攻。"""
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.active_player_id = 1
+    gs.in_game = True
+    _hero(gs, 1, 1, mana=2, used=0)
+    _hero(gs, 2, 2)
+    _hand_minion(gs, 30, 1, 3, 5, 0, card_id="CORE_BT_156", rush=True)
+
+    checker = LethalChecker(gs)
+    total = checker.overlay_board_face_damage()
+    assert total == 0, f"dormant vilefiend must not rush-face, got {total}"
+    print("OK p0 imprisoned vilefiend dormant", total)
+
+
+def test_p0_red_card_then_board_then_ball_hog_lethal():
+    """红牌休眠嘲讽后：场攻压英雄至唯一最低血，球霸战吼打脸斩杀。
+
+    复盘 2026-08-05：嘲讽 6 血 + 非嘲 3 血，对手 10 血；红牌→混乱打击/爪→场攻 8→球霸 3。
+    """
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.active_player_id = 1
+    gs.in_game = True
+    _hero(gs, 1, 1, mana=10, used=0)
+    opp = _hero(gs, 2, 2)
+    opp.health = 10
+    opp.damage = 20
+    _minion(gs, 10, 1, 2, 1, card_id="ETC_398")
+    _minion(gs, 11, 1, 3, 1, card_id="REV_943t")
+    _minion(gs, 20, 2, 2, 6, taunt=True, card_id="MAW_022")
+    _minion(gs, 21, 2, 2, 3, card_id="JAIL_432")
+    _hand_spell(gs, 30, 1, "TOY_644", 1)
+    _hand_spell(gs, 31, 1, "CORE_BT_035", 2)
+    _hand_minion(gs, 32, 1, 3, 3, 4, card_id="TOY_642")
+    _hero_power(gs, 40, 1, "HERO_10bp", cost=1)
+
+    checker = LethalChecker(gs)
+    total = checker.overlay_board_face_damage()
+    note = checker.overlay_spell_note() or ""
+    assert total >= 10, f"expected >=10 face, got {total} note={note}"
+    assert "红牌" in note, note
+    assert "球霸" in note or "TOY_642" in note or "野猪" in note, note
+    _, _, lethal = checker.calculate_lethal_potential()
+    assert lethal, (total, note)
+    print("OK p0 red+board+ball hog lethal", total, note)
+
+
 def test_p0_astral_phaser_dormant_taunt_face():
     """星域相变射线：抉择休眠嘲讽后 6/6 打脸。"""
     gs = GameState()
@@ -6030,6 +6119,13 @@ def test_p0_rush_inquisitor_dh_claws_empty_board_nine():
     gs.active_player_id = 1
     _hero(gs, 1, 1, mana=10, used=0)
     _hero(gs, 2, 2)
+    # 避免空牌库疲劳把 9 抬成 10
+    for i, eid in enumerate(range(100, 105)):
+        e = gs.get_entity(eid)
+        e.controller = 2
+        e.zone = "DECK"
+        e.card_id = f"DECK_{i}"
+        e.tags["ZONE"] = "DECK"
     _hero_power(gs, 50, 1, "HERO_10bp", cost=1)
     _hand_minion(gs, 30, 1, 8, 8, 8, card_id="CS3_020", rush=True)
 
@@ -6050,6 +6146,12 @@ def test_p0_rush_inquisitor_mirror_weapon_face_ten():
     gs.in_game = True
     _hero(gs, 1, 1, mana=10, used=0)
     _hero(gs, 2, 2)
+    for i, eid in enumerate(range(100, 105)):
+        e = gs.get_entity(eid)
+        e.controller = 2
+        e.zone = "DECK"
+        e.card_id = f"DECK_{i}"
+        e.tags["ZONE"] = "DECK"
     m = _minion(gs, 10, 1, 6, 6, card_id="M66")
     m.tags["NUM_TURNS_IN_PLAY"] = 1
     _minion(gs, 20, 2, 4, 4, taunt=True, card_id="T1")
@@ -6578,6 +6680,9 @@ if __name__ == "__main__":
     test_p0_red_card_magtheridon_wake_end_turn()
     test_p0_red_card_magtheridon_prefers_face_attack()
     test_p0_red_card_two_taunts_face()
+    test_p0_red_card_battlefiend_hero_attack_lethal()
+    test_p0_imprisoned_vilefiend_dormant_no_rush_face()
+    test_p0_red_card_then_board_then_ball_hog_lethal()
     test_p0_red_card_skips_enemy_non_taunt_only()
     test_p0_red_card_non_taunt_ball_hog_lethal()
     test_p0_red_card_non_taunt_arcane_missiles_redirect()

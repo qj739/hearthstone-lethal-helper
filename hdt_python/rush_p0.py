@@ -202,6 +202,15 @@ def _apply_felrattler(t, f, *, mult, **_kw) -> SpellApplyResult:
     return SpellApplyResult()
 
 
+def _apply_imprisoned_vilefiend(t, f, *, mult, **_kw) -> SpellApplyResult:
+    """被禁锢的邪犬：休眠 2 回合，本回合不能攻击（醒来后才有突袭）。"""
+    _summon_friendly_fighter(
+        f, 3 * mult, 5 * mult, card_id="CORE_BT_156", rush=False,
+    )
+    f[-1]["dormant"] = True
+    return SpellApplyResult()
+
+
 def _apply_bargain_bin_buccaneer(
     t, f, *, mult, card=None, combo_active=False, gs=None, player_id=None, **_kw,
 ) -> SpellApplyResult:
@@ -235,6 +244,8 @@ _RUSH_OVERRIDES = {
     "MAW_009": (5, "影犬", _apply_shadehound),
     "CORE_MAW_009": (5, "影犬", _apply_shadehound),
     "CORE_WC_701": (3, "邪能响尾蛇", _apply_felrattler),
+    "CORE_BT_156": (2, "被禁锢的邪犬", _apply_imprisoned_vilefiend),
+    "BT_156": (2, "被禁锢的邪犬", _apply_imprisoned_vilefiend),
     "TOY_516": (3, "折价区海盗", _apply_bargain_bin_buccaneer),
 }
 

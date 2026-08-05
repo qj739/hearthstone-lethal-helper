@@ -111,6 +111,8 @@ def _equip(
     buff_friendly_stats_after: tuple[int, int] = (0, 0),
     buff_all_paladin_stats_after: tuple[int, int] = (0, 0),
     summon_on_attack: tuple[int, int] | None = None,
+    deathrattle_buff_friendly_from_script: bool = False,
+    script_data_num_1: int = 0,
     gs: Optional["GameState"] = None,
     player_id: Optional[int] = None,
     next_turn_preview: bool = False,
@@ -175,6 +177,9 @@ def _equip(
     if summon_on_attack:
         sa, sh = summon_on_attack
         w["summon_on_attack"] = (sa * mult, sh * mult)
+    if deathrattle_buff_friendly_from_script:
+        w["deathrattle_buff_friendly_from_script"] = True
+        w["script_data_num_1"] = max(1, int(script_data_num_1 or 0) or 1) * mult
 
 
 # 已装备武器的攻击后效果（与 _equip 中 hand 打出一致；供 _build_fighters 挂载）
@@ -186,6 +191,8 @@ WEAPON_AFTER_ATTACK_META: dict[str, dict] = {
     "DMF_705": {"buff_friendly_stats_after": (1, 1)},
     "JAIL_329": {"buff_all_paladin_stats_after": (2, 2)},
     "TOY_358": {"summon_on_attack": (1, 1)},
+    # 迪斯科战槌：耐久耗尽亡语，随机友方 +N/+N（N=TAG_SCRIPT_DATA_NUM_1）
+    "ETC_317": {"deathrattle_buff_friendly_from_script": True},
 }
 
 
@@ -203,6 +210,10 @@ def stamp_equipped_weapon_effects(fighter: dict, card_id: str) -> None:
         return
     for key, val in meta.items():
         fighter[key] = val
+    # 迪斯科战槌等：脚本层数未知时按基础 +1/+1
+    if fighter.get("deathrattle_buff_friendly_from_script"):
+        if int(fighter.get("script_data_num_1", 0) or 0) <= 0:
+            fighter["script_data_num_1"] = 1
 
 
 def apply_after_attack_friendly_buffs(weapon: dict, fighters: List[dict]) -> None:
@@ -222,6 +233,35 @@ def apply_after_attack_friendly_buffs(weapon: dict, fighters: List[dict]) -> Non
         _buff_all_friendly_paladin_minions(
             fighters, atk_bonus=int(ba), hp_bonus=int(bh),
         )
+
+
+def apply_weapon_break_deathrattle(
+    weapon: dict,
+    fighters: List[dict],
+    *,
+    rng: Optional[random.Random] = None,
+) -> None:
+    """武器耐久耗尽时的亡语（迪斯科战槌：随机友方 +N/+N）。
+
+    无 rng 时偏斩杀：把 buff 给「剩余打脸贡献」最大的友方随从。
+    """
+    if not weapon.get("deathrattle_buff_friendly_from_script"):
+        return
+    n = int(weapon.get("script_data_num_1", 0) or 0)
+    if n <= 0:
+        n = 1
+    alive = [
+        f for f in fighters
+        if f.get("kind") == "minion" and int(f.get("health", 0) or 0) > 0
+    ]
+    if not alive:
+        return
+    if rng is not None:
+        target = rng.choice(alive)
+        target["atk"] = int(target.get("atk", 0) or 0) + n
+        target["health"] = int(target.get("health", 0) or 0) + n
+        return
+    _buff_friendly_minion(fighters, atk_bonus=n, hp_bonus=n)
 
 
 def after_hero_weapon_attack(
@@ -321,6 +361,21 @@ def _apply_ancestral_axe(t, f, *, mult, **_kw):
 
 def _apply_hammer(t, f, *, mult, **_kw):
     _equip(f, 3, 3, "DMF_705", mult=mult, buff_friendly_stats_after=(1, 1), **_kw)
+    return SpellApplyResult()
+
+
+def _apply_disco_maul(t, f, *, mult, card=None, **_kw):
+    """迪斯科战槌：亡语随机友方 +N/+N（N 随装备期间打出的随从提升）。"""
+    wa, wd = _weapon_stats_from_card(card, 3, 2)
+    script = 1
+    if card is not None:
+        script = int(getattr(card, "tags", {}).get("TAG_SCRIPT_DATA_NUM_1", 0) or 0) or 1
+    _equip(
+        f, wa, wd, "ETC_317", mult=mult,
+        deathrattle_buff_friendly_from_script=True,
+        script_data_num_1=script,
+        **_kw,
+    )
     return SpellApplyResult()
 
 
@@ -482,6 +537,7 @@ _WEAPON_OVERRIDES = {
     "BT_922": ("棕红之翼", _apply_crimson_wings),
     "TLC_478": ("远祖之斧", _apply_ancestral_axe),
     "DMF_705": ("敲狼锤", _apply_hammer),
+    "ETC_317": ("迪斯科战槌", _apply_disco_maul),
     "JAIL_329": ("求真之锤", _apply_truth_seeker),
     "BOT_286": ("死金匕首", _apply_plague_knife),
     "TIME_875t1": ("弑君者", _apply_kingslayer),

@@ -1401,6 +1401,9 @@ class PlayerBoardView:
                             "attacks_left": remaining,
                             "durability": dur,
                             "can_face": True,
+                            "script_data_num_1": int(
+                                weapon_entity.tags.get("TAG_SCRIPT_DATA_NUM_1", 0) or 0
+                            ),
                         }
                         stamp_equipped_weapon_effects(
                             w_fighter, weapon_entity.card_id or "",
@@ -1410,6 +1413,15 @@ class PlayerBoardView:
                             apply_after_attack_friendly_buffs(
                                 w_fighter, minion_fighters,
                             )
+                            w_fighter["durability"] = max(
+                                0, int(w_fighter.get("durability", 0) or 0) - 1,
+                            )
+                            if int(w_fighter.get("durability", 0) or 0) <= 0:
+                                from .weapon_p0 import apply_weapon_break_deathrattle
+                                apply_weapon_break_deathrattle(
+                                    w_fighter, minion_fighters,
+                                )
+                                break
                 elif self.hero.attack > 0:
                     hits.append(self.hero.attack)
         hits.extend(simulate_minion_face_hits(minion_fighters, secret_active=secret_active))

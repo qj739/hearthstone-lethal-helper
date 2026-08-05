@@ -362,6 +362,7 @@ CLEAR_TARGETED_POINTED_SPELL_IDS = frozenset({
 # 须指定敌方随从方可打出（无随从时不可对英雄单独使用）
 SPELL_REQUIRES_ENEMY_MINION = frozenset({
     "TTN_853",  # 审判恶徒
+    "CS1_130", "CORE_CS1_130",  # 神圣惩击：只能打随从
 })
 
 # 须指定友方随从方可打出
@@ -2014,6 +2015,9 @@ _SPELL_SIM_TIER_OVERRIDES: Dict[str, SpellSimTier] = {
     # 红牌须与球霸/弹幕等同层，才能枚举「先红牌休眠挡枪 → 再打最低血/随机」；
     # 若留在 UTILITY，分层会固定成先直伤/清场后红牌，漏掉镂骨恶犬同血斩杀线
     "TOY_644": SpellSimTier.CLEAR_BOARD,        # 红牌：解嘲或导向打脸
+    # 折纸仙鹤须与神圣惩击等同层，才能枚举「先换血嘲讽 → 再点杀」；
+    # 若留在 UTILITY（战吼默认），分层会固定成先惩击后仙鹤，漏掉复生嘲讽斩杀线
+    "TOY_895": SpellSimTier.CLEAR_BOARD,
     "MIS_102": SpellSimTier.CLEAR_AND_FACE,     # 退货政策：触发本局友方亡语
     "SW_040": SpellSimTier.CLEAR_BOARD,         # 邪能弹幕：最低血敌人（可与红牌同层换序）
     "REV_290": SpellSimTier.UTILITY,            # 赎罪教堂 +2/+1
@@ -3170,7 +3174,11 @@ def spell_sequence_transposition_key(
     hero_hp: Optional[int],
     mana_left: Optional[int],
 ) -> tuple:
-    """法术阶段终态指纹：场面 + 累计直伤/吸血/自伤 + 剩余法力。"""
+    """法术阶段终态指纹：场面 + 累计直伤/战吼打脸/吸血/自伤 + 剩余法力。
+
+    必须计入 battlecry_face_damage：否则「爪后 0 费战吼打脸」会与
+    「爪后买不起的红牌空过」等同终态被置换剪枝丢掉（2026-08-05 火羽凤凰漏斩）。
+    """
     em = tuple(sorted(
         (k for m in enemy if (k := _living_minion_key(m)) is not None),
         key=lambda x: (x[0] or 0, x[7]),
@@ -3183,6 +3191,7 @@ def spell_sequence_transposition_key(
         em,
         ff,
         spell_acc.direct_face_damage,
+        spell_acc.battlecry_face_damage,
         spell_acc.opponent_lifesteal_heal,
         spell_acc.self_hero_heal,
         spell_acc.self_hero_damage,

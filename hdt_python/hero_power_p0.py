@@ -78,6 +78,15 @@ def _apply_mage_fireblast(t, f: List[dict], *, mult: int, enemy_shield: bool = F
     return _apply_best_minion_damage(t, f, dmg, enemy_shield=enemy_shield)
 
 
+def _apply_bouncing_pumpkin(t, f: List[dict], *, mult: int, enemy_shield: bool = False, **_kw) -> SpellApplyResult:
+    """跃动的南瓜：造成 3 点伤害（斩杀取最优目标；发现忽略）。"""
+    from .spell_board import _apply_optimal_single_target_damage
+
+    return _apply_optimal_single_target_damage(
+        t, f, 3 * mult, enemy_shield=enemy_shield,
+    )
+
+
 def _apply_druid_shapeshift(
     t,
     f: List[dict],
@@ -195,4 +204,10 @@ _register_hero_power(BoardSpellDef(
     2,
     "虚空之刺",
     _apply_void_spike,
+))
+_register_hero_power(BoardSpellDef(
+    ("TOY_829hp", "TOY_829hp3"),
+    2,
+    "跃动的南瓜",
+    _apply_bouncing_pumpkin,
 ))

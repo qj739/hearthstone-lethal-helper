@@ -15,6 +15,9 @@ SHADEHOUND_CARD_IDS = frozenset({
     "MAW_009", "MAW_009t", "CORE_MAW_009", "CORE_MAW_009t",
 })
 
+# 战斗邪犬：在你的英雄攻击后，获得 +1 攻击力
+BATTLEFIEND_CARD_IDS = frozenset({"BT_351", "CORE_BT_351"})
+
 # 场面随从 card_id → 攻击特效（打出时另由 rush_p0 写入 infused cleave 等）
 BOARD_ATTACK_EFFECTS = {
     "CS3_020": {"mirrors_hero_attack": True},
@@ -29,6 +32,47 @@ BOARD_ATTACK_EFFECTS = {
     "CORE_MAW_009": {"buff_other_beasts_on_attack": (2, 2)},
     "CORE_MAW_009t": {"buff_other_beasts_on_attack": (2, 2)},
 }
+
+
+def is_battlefiend_card_id(card_id: str) -> bool:
+    cid = card_id or ""
+    return cid in BATTLEFIEND_CARD_IDS or cid.endswith("BT_351")
+
+
+def mark_hero_attacked_this_sim(fighters: List[dict]) -> None:
+    """标记本段模拟中英雄已挥击（供刃缚精锐等「英雄攻击后」战吼）。"""
+    for f in fighters:
+        if f.get("kind") == "sim_meta":
+            f["hero_attacked_this_sim"] = True
+            return
+    fighters.append({
+        "kind": "sim_meta",
+        "health": 0,
+        "atk": 0,
+        "attacks_left": 0,
+        "hero_attacked_this_sim": True,
+    })
+
+
+def fighters_hero_attacked_this_sim(fighters: List[dict]) -> bool:
+    return any(bool(f.get("hero_attacked_this_sim")) for f in fighters)
+
+
+def buff_battlefiends_after_hero_attack(
+    fighters: List[dict],
+    *,
+    mark_on: Optional[List[dict]] = None,
+) -> None:
+    """英雄/武器挥击后：场上存活战斗邪犬 +1 攻；并在 mark_on（默认 fighters）上标记已攻击。"""
+    mark_hero_attacked_this_sim(mark_on if mark_on is not None else fighters)
+    for f in fighters:
+        if f.get("kind") != "minion" or f.get("health", 0) <= 0:
+            continue
+        if f.get("silenced"):
+            continue
+        if not is_battlefiend_card_id(str(f.get("card_id") or "")):
+            continue
+        f["atk"] = int(f.get("atk", 0) or 0) + 1
 
 
 def stamp_fighter_attack_effects(fighter: dict, card_id: str = "", *, infused_cleave: bool = False) -> None:
@@ -308,7 +352,8 @@ def after_hero_attack(
     defender_shield: bool,
     target_is_face: bool = False,
 ) -> int:
-    """英雄攻击后：伊利达雷审判官跟刀（与随从自身 attacks_left / 突袭禁脸无关）。"""
+    """英雄攻击后：战斗邪犬 +1；伊利达雷审判官跟刀（与随从自身 attacks_left / 突袭禁脸无关）。"""
+    buff_battlefiends_after_hero_attack(fighters)
     extra_heal = 0
     for f in fighters:
         if not f.get("mirrors_hero_attack") or f.get("health", 0) <= 0:

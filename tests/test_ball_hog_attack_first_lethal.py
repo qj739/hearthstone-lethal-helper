@@ -98,6 +98,13 @@ def test_ball_hog_tied_lowest_not_guaranteed_lethal():
     gs.in_game = True
     _hero(gs, 1, 1, mana=10)
     _hero(gs, 2, 2, hp=30, dmg=28)  # 2 血
+    # 避免空牌库疲劳把搜索阈值压低，误把并列随机当成确定斩
+    for i, eid in enumerate(range(100, 105)):
+        e = gs.get_entity(eid)
+        e.controller = 2
+        e.zone = "DECK"
+        e.card_id = f"DECK_{i}"
+        e.tags["ZONE"] = "DECK"
     _minion(gs, 20, 2, 3, 2, card_id="TOY_893")
     _hand_bc(gs, 30, 1, "TOY_642", 4)
 
@@ -162,9 +169,8 @@ def test_ball_hog_attack_first_then_face_lethal():
             spell_mult=1, defender_shield=False, available_mana=10,
         )
     )
-    # spell_first: 板 3，球霸打套娃 → 总伤 3
-    assert sf[0] == 3, f"spell_first expected 3, got {sf}"
-    # attack_first: 板 3 + 球霸打脸 3 → 6
+    # 场攻可把英雄压到唯一最低血时，spell_first/attack_first 均经 ensure 记入球霸打脸
+    assert sf[0] >= 6, f"spell_first expected >=6 (board plan + hog face), got {sf}"
     assert af[0] >= 6, f"attack_first expected >=6 (3+3), got {af}"
     assert af[8] >= 3 or (af[0] - af[1]) >= 3, (
         f"battlecry face should be counted, got {af}"

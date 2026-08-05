@@ -545,6 +545,7 @@ def _register_p0_minion() -> None:
         (("WW_393t",), 1, "影叶瓶子", _apply_shadeleaf_bottle, False, None),
         (("CORE_EX1_259",), 3, "闪电风暴", _apply_lightning_storm, False, None),
         (("CORE_EX1_391",), 1, "猛击", _minion_damage_fn(2), False, None),
+        (("CS1_130", "CORE_CS1_130"), 1, "神圣惩击", _minion_damage_fn(3), False, None),
         (("REV_249",), 1, "炽燃圣光", _apply_light_it_burns, False, None),
         (("TIME_702",), 2, "潮起潮落", _optimal_damage_fn(3), False, None),
         (("TSC_932",), 6, "血染大海", _apply_blood_in_the_water, False, None),

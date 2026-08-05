@@ -50,10 +50,16 @@ def _friendly_taunt_blocks_face(fighters: List[dict]) -> bool:
 
 
 def fighters_face_hits(fighters: List[dict]) -> List[int]:
+    """打脸命中：先结算英雄/武器挥击（触发战斗邪犬等），再算随从。"""
     if _friendly_taunt_blocks_face(fighters):
         return []
+    from .rush_combat import buff_battlefiends_after_hero_attack
+
     hits: List[int] = []
+    # 先英雄/武器：每挥一次给战斗邪犬 +1，再计入随从打脸
     for f in fighters:
+        if f.get("kind") not in ("weapon", "hero"):
+            continue
         if not f.get("can_face", True):
             continue
         if f["health"] <= 0 or f["attacks_left"] <= 0:
@@ -63,6 +69,16 @@ def fighters_face_hits(fighters: List[dict]) -> List[int]:
         else:
             n = f["attacks_left"]
         for _ in range(n):
+            hits.append(f["atk"])
+            buff_battlefiends_after_hero_attack(fighters)
+    for f in fighters:
+        if f.get("kind") in ("weapon", "hero"):
+            continue
+        if not f.get("can_face", True):
+            continue
+        if f["health"] <= 0 or f["attacks_left"] <= 0:
+            continue
+        for _ in range(f["attacks_left"]):
             hits.append(f["atk"])
     return hits
 
@@ -124,6 +140,8 @@ def kill_taunt_outcomes(
     旧实现对每次挥击做全排列 DFS，亡者大军等召出多个突袭后会指数爆炸卡死。
     改为贪心：优先消耗不能打脸的突袭，再消耗其余随从（低攻优先，保留高攻打脸）。
     """
+    from .rush_combat import buff_battlefiends_after_hero_attack
+
     fs = copy.deepcopy(fighters)
     t = copy.deepcopy(taunt)
     other = copy.deepcopy(other_taunts)
@@ -133,8 +151,24 @@ def kill_taunt_outcomes(
         f = fs[idx]
         # 突袭且不能打脸：优先用于清嘲
         rush_only = 0 if (f.get("rush") and not f.get("can_face", True)) else 1
+        # 场上有审判官跟刀时：英雄/武器打嘲讽会顺带跟刀并耗尽挥击，应留给打脸
+        hero_swing = 0
+        if f.get("kind") in ("weapon", "hero") and any(
+            x.get("mirrors_hero_attack") and int(x.get("health", 0) or 0) > 0
+            for x in fs
+        ):
+            hero_swing = 1
+        # 战斗邪犬会被反击打死时靠后（留给英雄触发 +1 后再打脸）
+        from .rush_combat import is_battlefiend_card_id
+        dies = 0
+        if (
+            is_battlefiend_card_id(str(f.get("card_id") or ""))
+            and not f.get("shield")
+            and int(f.get("health", 0) or 0) <= int(t.get("atk", 0) or 0)
+        ):
+            dies = 1
         # 同档优先低攻，减少对高攻打脸的浪费
-        return (rush_only, int(f.get("atk", 0) or 0), idx)
+        return (rush_only, hero_swing, dies, int(f.get("atk", 0) or 0), idx)
 
     guard = 0
     while not taunt_is_dead(t):
@@ -149,19 +183,25 @@ def kill_taunt_outcomes(
             break
         i = min(candidates, key=_swing_key)
         heal += apply_single_attack(fs[i], t)
+        if fs[i].get("kind") in ("weapon", "hero"):
+            buff_battlefiends_after_hero_attack(fs)
+        if fs[i].get("kind") == "weapon" and int(fs[i].get("durability", 0) or 0) <= 0:
+            from .weapon_p0 import apply_weapon_break_deathrattle
+            apply_weapon_break_deathrattle(fs[i], fs)
         if taunt_is_dead(t):
             board2 = other + [t]
             resolve_minion_death(t, board2, fs)
             remove_dead_taunts(board2)
-            other[:] = [m for m in board2 if m is not t and m.get("health", 0) > 0]
-            # 己方随从被反击打死时也要结算亡语
             if fs[i].get("health", 0) <= 0:
                 resolve_minion_death(fs[i], board2, fs)
                 remove_dead_taunts(board2)
-                other[:] = [
-                    m for m in board2
-                    if m is not t and m.get("health", 0) > 0 and m.get("kind") != "hero"
-                ]
+            other[:] = [
+                m for m in board2
+                if m is not t and m.get("health", 0) > 0 and m.get("kind") != "hero"
+            ]
+            # 复生后嘲讽仍存活：继续贪心挥击，勿当作已清掉
+            if not taunt_is_dead(t):
+                continue
             break
         if fs[i].get("health", 0) <= 0:
             board2 = other + [t]

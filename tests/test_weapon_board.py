@@ -508,6 +508,47 @@ def test_default_hand_weapon_reads_windfury_tag():
     print("OK default hand weapon windfury tag", total)
 
 
+def test_disco_maul_break_buff_lethal():
+    """
+    迪斯科战槌亡语：耐久耗尽时随机友方 +N/+N（N=TAG_SCRIPT_DATA_NUM_1）。
+    复现：3+2+3 随从 + 武器 3/1（脚本 2）对 13 血 → 挥槌后 +2 打脸够斩。
+    """
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.active_player_id = 1
+    gs.in_game = True
+    _hero(gs, 1, 1, atk479=0)
+    opp = _hero(gs, 2, 2)
+    opp.health = 30
+    opp.damage = 17  # 13 血
+    opp.tags["DAMAGE"] = 17
+    _minion(gs, 10, 1, 3, 2)
+    _minion(gs, 11, 1, 2, 4)
+    _minion(gs, 12, 1, 3, 2)
+    w = _weapon(gs, 40, 1, card_id="ETC_317", atk=3, dur=1)
+    w.tags["TAG_SCRIPT_DATA_NUM_1"] = 2
+    w.tags["DEATHRATTLE"] = 1
+
+    checker = LethalChecker(gs)
+    fighters = checker._build_fighters(gs.get_overlay_board(1), 1)
+    weapon_f = next(f for f in fighters if f.get("kind") == "weapon")
+    assert weapon_f.get("deathrattle_buff_friendly_from_script"), weapon_f
+    assert int(weapon_f.get("script_data_num_1", 0) or 0) == 2, weapon_f
+
+    face = checker.overlay_board_face_damage()
+    pure, minion_bd, weapon_bd, spell, hp = checker.overlay_board_breakdown()
+    # 无亡语：8+3=11；有亡语 +2：13
+    assert weapon_bd == 3, (face, minion_bd, weapon_bd)
+    assert minion_bd >= 10, (face, minion_bd, weapon_bd)
+    assert face >= 13, f"expected >=13 with disco DR buff, got {face} bd={minion_bd}+{weapon_bd}"
+
+    total, _, lethal = checker.calculate_lethal_potential()
+    assert total >= 13, total
+    assert lethal, (total, face, minion_bd, weapon_bd)
+    print("OK disco maul break buff lethal", face, minion_bd, weapon_bd, lethal)
+
+
 if __name__ == "__main__":
     test_atiesh_weapon_strike_when_hero_479_zero()
     test_atiesh_weapon_in_overlay_with_moonwell()
@@ -517,6 +558,7 @@ if __name__ == "__main__":
     test_dk_ghoul_on_board_counts_as_skill_not_minion()
     test_opp_turn_hammer_muncher_board_floor()
     test_equipped_hammer_stamps_after_attack_buff()
+    test_disco_maul_break_buff_lethal()
     test_hand_of_infinity_cannot_face()
     test_split_fighter_face_divine_shield_once()
     test_abusive_sergeant_lethal_through_hero_divine_shield()

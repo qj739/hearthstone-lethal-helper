@@ -30,7 +30,12 @@ from .board_damage import (
 )
 from .battlecry_board import hand_all_board_plays
 from .interleave_board import interleave_note_suffix, sequence_needs_attack_interleave, sequence_has_interleave_spell
-from .hero_power_board import has_usable_hero_power, usable_hero_power, apply_hero_power_to_fighters
+from .hero_power_board import (
+    has_usable_hero_power,
+    usable_hero_power,
+    apply_hero_power_to_fighters,
+    hero_power_should_inline_in_sequence,
+)
 from .spell_board import (
     enumerate_spell_sequences,
     apply_spell_sequence,
@@ -384,22 +389,65 @@ class LethalChecker:
     def _sequence_lowest_enemy_hit_damage(
         seq: List, spell_mult: int = 1,
     ) -> Optional[int]:
-        """单卡「最低血敌人」效果的总伤害；非此类序列返回 None。"""
-        if not seq or len(seq) != 1:
+        """序列中所有「最低血敌人」效果的总伤害；无此类牌返回 None。"""
+        if not seq:
             return None
         from .interleave_board import step_card_id
         from .spell_p0_other import _RED_CARD_REDIRECT_HAND
 
-        defn, _, card = seq[0]
-        cid = step_card_id(defn, card)
-        row = _RED_CARD_REDIRECT_HAND.get(cid)
-        if not row or row[0] != "lowest":
-            base = cid[5:] if cid.startswith("CORE_") else cid
-            row = _RED_CARD_REDIRECT_HAND.get(base)
-        if not row or row[0] != "lowest":
-            return None
-        _, dmg, hits = row
-        return max(0, int(dmg)) * max(0, int(hits)) * max(int(spell_mult), 1)
+        total = 0
+        found = False
+        for defn, _, card in seq:
+            cid = step_card_id(defn, card)
+            row = _RED_CARD_REDIRECT_HAND.get(cid)
+            if not row or row[0] != "lowest":
+                base = cid[5:] if cid.startswith("CORE_") else cid
+                row = _RED_CARD_REDIRECT_HAND.get(base)
+            if not row or row[0] != "lowest":
+                continue
+            found = True
+            _, dmg, hits = row
+            total += max(0, int(dmg)) * max(0, int(hits)) * max(int(spell_mult), 1)
+        return total if found else None
+
+    def _enemy_minion_hps_before_lowest_hits(
+        self,
+        seq: List,
+        base_enemy_minions: List[dict],
+        *,
+        spell_mult: int = 1,
+        defender_shield: bool = False,
+        available_mana: Optional[int] = None,
+    ) -> List[int]:
+        """红牌等解嘲后、球霸等最低血伤害结算前的敌方随从血量。"""
+        from .combat_sim import unit_is_dormant
+        from .interleave_board import step_card_id
+        from .spell_board import apply_spell_sequence_with_meta
+        from .spell_p0_other import _RED_CARD_REDIRECT_HAND
+
+        def _is_lowest(defn, card) -> bool:
+            cid = step_card_id(defn, card)
+            row = _RED_CARD_REDIRECT_HAND.get(cid)
+            if not row or row[0] != "lowest":
+                base = cid[5:] if cid.startswith("CORE_") else cid
+                row = _RED_CARD_REDIRECT_HAND.get(base)
+            return bool(row and row[0] == "lowest")
+
+        pre_seq = [step for step in seq if not _is_lowest(step[0], step[2])]
+        enemy = _clone_combat_states(base_enemy_minions)
+        if pre_seq:
+            apply_spell_sequence_with_meta(
+                enemy, [], pre_seq, spell_mult=spell_mult,
+                enemy_shield=defender_shield, rng=None,
+                gs=self.game_state, player_id=self.game_state.local_player_id,
+                mana_budget=available_mana,
+                next_turn_preview=self._hero_power_next_turn(),
+            )
+        return [
+            int(m.get("health", 0) or 0)
+            for m in enemy
+            if int(m.get("health", 0) or 0) > 0 and not unit_is_dormant(m)
+        ]
 
     def _ensure_lowest_hit_face_by_board_plan(
         self,
@@ -410,6 +458,7 @@ class LethalChecker:
         enemy_board: List[dict],
         defender_shield: bool,
         spell_mult: int = 1,
+        enemy_minion_healths: Optional[List[int]] = None,
     ) -> None:
         """
         球霸野猪人等斩杀规划（先攻后法）：
@@ -430,11 +479,14 @@ class LethalChecker:
         if already >= hit:
             return
         opp0 = self._opponent_hero_hp_after_face_damage(defender_shield, 0)
-        minion_hps = [
-            int(m.get("health", 0) or 0)
-            for m in enemy_board
-            if int(m.get("health", 0) or 0) > 0 and not unit_is_dormant(m)
-        ]
+        if enemy_minion_healths is not None:
+            minion_hps = [int(h) for h in enemy_minion_healths if int(h or 0) > 0]
+        else:
+            minion_hps = [
+                int(m.get("health", 0) or 0)
+                for m in enemy_board
+                if int(m.get("health", 0) or 0) > 0 and not unit_is_dormant(m)
+            ]
         if not board_enables_lowest_hit_face_lethal(
             board_face=board_face,
             opponent_hp=opp0,
@@ -1291,31 +1343,38 @@ class LethalChecker:
         defender_shield: bool = False,
         enemy: Optional[List[dict]] = None,
         hp_mode: str = "face",
-    ) -> Tuple[List[dict], Optional[int], Optional[str], SpellApplyResult]:
-        """可选：先使用英雄技能，返回 (fighters, 剩余法力, 技能名, 技能结果)。"""
+    ) -> Tuple[List[dict], Optional[int], Optional[str], SpellApplyResult, List[dict]]:
+        """可选：先使用英雄技能，返回 (fighters, 剩余法力, 技能名, 技能结果, 技能后敌方场面)。"""
+        base_enemy = _clone_combat_states(enemy or [])
         if not use_hp:
-            return _clone_combat_states(fighters), mana, None, SpellApplyResult()
+            return (
+                _clone_combat_states(fighters), mana, None,
+                SpellApplyResult(), base_enemy,
+            )
         fs = _clone_combat_states(fighters)
         next_turn = self._hero_power_next_turn()
         row = usable_hero_power(
             self.game_state, player_id, mana or 0, next_turn=next_turn,
         )
         if row is None:
-            return fs, mana, None, SpellApplyResult()
+            return fs, mana, None, SpellApplyResult(), base_enemy
         _hp, defn, cost = row
         if hp_mode == "setup":
             from .damaged_spell_power import apply_mage_fireblast_setup
             if not apply_mage_fireblast_setup(fs):
-                return _clone_combat_states(fighters), mana, None, SpellApplyResult()
+                return (
+                    _clone_combat_states(fighters), mana, None,
+                    SpellApplyResult(), base_enemy,
+                )
             mana_left = None if mana is None else mana - cost
-            return fs, mana_left, defn.name, SpellApplyResult()
+            return fs, mana_left, defn.name, SpellApplyResult(), base_enemy
         applied, mana_left, hp_res = apply_hero_power_to_fighters(
             self.game_state, player_id, fs, mana, enemy_shield=defender_shield,
-            next_turn=next_turn, taunts=_clone_combat_states(enemy or []),
+            next_turn=next_turn, taunts=base_enemy,
         )
         if not applied:
-            return fs, mana, None, SpellApplyResult()
-        return fs, mana_left, defn.name, hp_res
+            return fs, mana, None, SpellApplyResult(), _clone_combat_states(enemy or [])
+        return fs, mana_left, defn.name, hp_res, base_enemy
 
     @staticmethod
     def _stolen_minion_face(fighters: List[dict], defender_shield: bool = False) -> int:
@@ -1352,7 +1411,10 @@ class LethalChecker:
         不可对随从/武器分项各自独立枚举（否则会漏掉攻击后 buff）。
         """
         from .combat_sim import _friendly_taunt_blocks_face, _normalize_fighters
-        from .rush_combat import simulate_minion_face_hits
+        from .rush_combat import (
+            buff_battlefiends_after_hero_attack,
+            simulate_minion_face_hits,
+        )
         from .weapon_p0 import apply_after_attack_friendly_buffs
 
         empty: Tuple[List[int], List[int], List[int], List[int], List[int]] = (
@@ -1394,14 +1456,27 @@ class LethalChecker:
                 n = min(attacks_left, f.get("durability", 0))
             else:
                 n = attacks_left
+            dur_left = int(f.get("durability", 0) or 0) if f.get("kind") == "weapon" else 0
             for _ in range(n):
                 if f.get("from_hero_power"):
                     hp_hits.append(f["atk"])
                 elif f.get("kind") == "weapon":
                     weapon_hits.append(f["atk"])
                     apply_after_attack_friendly_buffs(f, minion_fs)
+                    # 邪犬 buff 在 minion 拷贝上；「英雄已攻击」标记须写回 fighters，供刃缚等战吼
+                    buff_battlefiends_after_hero_attack(minion_fs, mark_on=fighters)
+                    # 仅用局部耐久推演破斧亡语，勿写回 fighters：
+                    # 否则后续审判官跟刀按已扣耐久会算成 0 次英雄挥击
+                    dur_left = max(0, dur_left - 1)
+                    if dur_left <= 0:
+                        from .weapon_p0 import apply_weapon_break_deathrattle
+                        apply_weapon_break_deathrattle(f, minion_fs)
+                        break
+                    continue
                 else:
                     hero_buff_hits.append(f["atk"])
+                # 英雄/技能挥击：战斗邪犬 +1（再算随从打脸）
+                buff_battlefiends_after_hero_attack(minion_fs, mark_on=fighters)
 
         board_fs = [m for m, meta in zip(minion_fs, minion_meta) if meta == "board"]
         hp_minion_fs = [m for m, meta in zip(minion_fs, minion_meta) if meta == "hp"]
@@ -1435,12 +1510,14 @@ class LethalChecker:
         """
         from .rush_combat import inquisitor_face_mirror_hits
 
+        # 跟刀次数须在 face_hit_buckets 之前按当前耐久计算（buckets 内会局部推演破斧）
+        mirror_hits = inquisitor_face_mirror_hits(fighters, [])
         minion_hits, weapon_hits, hero_buff_hits, hp_hits, _stolen = (
             LethalChecker._face_hit_buckets(fighters)
         )
         weapon_hits = list(weapon_hits) + LethalChecker._weapon_aoe_face_hits(fighters)
         # 跟刀按全场英雄挥击次数计，并入随从分项
-        minion_hits = list(minion_hits) + inquisitor_face_mirror_hits(fighters, [])
+        minion_hits = list(minion_hits) + list(mirror_hits)
 
         buckets = [minion_hits, weapon_hits, hero_buff_hits, hp_hits]
         if not defender_shield:
@@ -1982,8 +2059,27 @@ class LethalChecker:
                 next_turn_preview=self._hero_power_next_turn(),
             )
             after_shield = _shield_after_spells(spell_res, defender_shield)
+            spell_res = _add_extra(spell_res)
+            # 红牌解嘲后：场攻能否把英雄压到唯一最低血 → 球霸等记入打脸
+            remain_m, remain_w, remain_hb, remain_hp = self._split_fighter_face(
+                fs, after_shield,
+            )
+            plan_hps = self._enemy_minion_hps_before_lowest_hits(
+                seq, base_enemy_minions,
+                spell_mult=spell_mult,
+                defender_shield=defender_shield,
+                available_mana=available_mana,
+            )
+            self._ensure_lowest_hit_face_by_board_plan(
+                seq, spell_res,
+                board_face=remain_m + remain_w + remain_hb + remain_hp,
+                enemy_board=enemy,
+                defender_shield=defender_shield,
+                spell_mult=spell_mult,
+                enemy_minion_healths=plan_hps,
+            )
             return self._spell_first_face_from_state(
-                enemy, fs, _add_extra(spell_res), mana_end, charges, after_shield, hp_direct,
+                enemy, fs, spell_res, mana_end, charges, after_shield, hp_direct,
                 rng=rng, hero_hp_after_spells=hp_end,
             )
         else:
@@ -2078,13 +2174,27 @@ class LethalChecker:
             )
             atk_shield = _shield_after_spells(spell_res, atk_shield)
             spell_res.direct_face_damage += extra_spell_face
-            # 球霸等：按「场攻+N 能否斩 → 场攻能否压英雄至最低血」确保战吼打脸入账
+            # 球霸等：红牌解嘲后用「剩余打脸」判断能否把英雄压到唯一最低血
+            remain_m, remain_w, remain_hb, remain_hp = self._split_fighter_face(
+                fs, atk_shield,
+            )
+            plan_face = max(
+                board_face,
+                remain_m + remain_w + remain_hb + remain_hp,
+            )
+            plan_hps = self._enemy_minion_hps_before_lowest_hits(
+                seq, base_enemy_minions,
+                spell_mult=spell_mult,
+                defender_shield=defender_shield,
+                available_mana=available_mana,
+            )
             self._ensure_lowest_hit_face_by_board_plan(
                 seq, spell_res,
-                board_face=board_face,
-                enemy_board=base_enemy_minions,
+                board_face=plan_face,
+                enemy_board=enemy,
                 defender_shield=defender_shield,
                 spell_mult=spell_mult,
+                enemy_minion_healths=plan_hps,
             )
             if self._hero_dead_after_spells(hp_end):
                 return self._face_outcome_hero_dead_after_spells(
@@ -2271,6 +2381,25 @@ class LethalChecker:
             or sequence_has_ogre(seq)
             or fighters_need_random_attacks(fighters)
         )
+
+    def _seq_random_only_lowest_hit(self, seq: List) -> bool:
+        """序列里 uses_random 的牌是否全是「最低血敌人」类（球霸/弹幕等）。"""
+        if not seq or not sequence_uses_random(seq):
+            return False
+        from .interleave_board import step_card_id
+        from .spell_p0_other import _RED_CARD_REDIRECT_HAND
+
+        for defn, _, card in seq:
+            if not defn.uses_random:
+                continue
+            cid = step_card_id(defn, card)
+            row = _RED_CARD_REDIRECT_HAND.get(cid)
+            if not row or row[0] != "lowest":
+                base = cid[5:] if cid.startswith("CORE_") else cid
+                row = _RED_CARD_REDIRECT_HAND.get(base)
+            if not row or row[0] != "lowest":
+                return False
+        return True
 
     def _line_needs_random(self, seq: List, fighters: List[dict]) -> bool:
         local = self.game_state.local_player_id
@@ -2704,7 +2833,7 @@ class LethalChecker:
             self._hero_power_mana_budget(available_mana, available_mana),
             next_turn=self._hero_power_next_turn(),
         ):
-            fs, _, hp_name, _ = self._prepare_line_with_hero_power(
+            fs, _, hp_name, _, _ = self._prepare_line_with_hero_power(
                 fs,
                 player_id,
                 self._hero_power_mana_budget(available_mana, available_mana),
@@ -2971,6 +3100,34 @@ class LethalChecker:
         sim_seq = self._combo_seq_for_simulation(best_seq)
         sim_mana = available_mana - int(getattr(self, "_overlay_direct_mana", 0) or 0)
         needs_random = self._line_needs_random(sim_seq, fighters)
+        # 球霸等：场攻计划已使英雄成唯一最低血 → 战吼打脸确定，勿走 MC 把 P 打成 0
+        if (
+            needs_random
+            and best_battlecry_face > 0
+            and self._seq_random_only_lowest_hit(sim_seq)
+        ):
+            from .spell_board import board_enables_lowest_hit_face_lethal
+
+            hit = self._sequence_lowest_enemy_hit_damage(sim_seq, spell_mult) or 0
+            plan_face = (
+                best_board + best_weapon_board
+                + best_hero_buff_face + best_hero_power_face
+            )
+            plan_hps = self._enemy_minion_hps_before_lowest_hits(
+                sim_seq, base_enemy_minions,
+                spell_mult=spell_mult,
+                defender_shield=defender_shield,
+                available_mana=sim_mana,
+            )
+            # 必须用真实对手血量，不能用含疲劳的搜索阈值（否则 2 血并列会被误判成确定打脸）
+            opp_hp_plan = self.get_opponent_effective_hp()
+            if hit > 0 and best_battlecry_face >= hit and board_enables_lowest_hit_face_lethal(
+                board_face=plan_face,
+                opponent_hp=opp_hp_plan,
+                enemy_minion_healths=plan_hps,
+                hit_damage=hit,
+            ):
+                needs_random = False
         if needs_random:
             if sim_seq:
                 mc_max, prob, top_outcomes = self._monte_carlo_line_stats(
@@ -3147,15 +3304,33 @@ class LethalChecker:
                 search_orders = ("spell_first", "attack_first")
 
             for use_hp, hp_mode in hp_modes:
-                line_fighters, line_mana, hp_name, hp_res = self._prepare_line_with_hero_power(
-                    fighters, player_id, hp_budget, use_hp=use_hp,
-                    defender_shield=defender_shield,
-                    enemy=base_enemy_minions,
-                    hp_mode=hp_mode,
+                line_fighters, line_mana, hp_name, hp_res, line_enemy = (
+                    self._prepare_line_with_hero_power(
+                        fighters, player_id, hp_budget, use_hp=use_hp,
+                        defender_shield=defender_shield,
+                        enemy=base_enemy_minions,
+                        hp_mode=hp_mode,
+                    )
                 )
                 if use_hp and not hp_name:
                     continue
-                if use_hp and hp_name:
+                inline_hp_step = None
+                if use_hp and hp_name and hp_mode == "face":
+                    row = usable_hero_power(
+                        self.game_state, player_id, hp_budget,
+                        next_turn=self._hero_power_next_turn(),
+                    )
+                    if row is not None and hero_power_should_inline_in_sequence(row[1]):
+                        # 点伤技能并入序列末尾，保留换血/解嘲后再点的顺序
+                        _hp_ent, hp_defn, hp_cost = row
+                        inline_hp_step = (hp_defn, hp_cost, _hp_ent)
+                        line_fighters = _clone_combat_states(fighters)
+                        line_enemy = _clone_combat_states(base_enemy_minions)
+                        line_mana = mana_for_spells
+                        if mana_for_spells is not None:
+                            line_mana = max(0, mana_for_spells - hp_cost)
+                        hp_res = SpellApplyResult()
+                if use_hp and hp_name and inline_hp_step is None:
                     if self.is_opponent_turn():
                         row = usable_hero_power(
                             self.game_state, player_id, hp_budget,
@@ -3163,52 +3338,62 @@ class LethalChecker:
                         )
                         hp_cost = row[2] if row else 0
                         line_mana = max(0, available_mana - direct_mana - hp_cost)
-                else:
+                elif inline_hp_step is None:
                     line_mana = mana_for_spells
                 hp_direct = hp_res.direct_face_damage
                 # 火冲等打脸破盾后，后续法术/场面按无盾结算；直伤前缀改用原始伤害
                 line_shield = defender_shield
                 line_direct = direct_face
-                if use_hp and hp_mode == "face" and hp_res.broke_enemy_hero_shield:
+                if (
+                    use_hp and hp_mode == "face" and inline_hp_step is None
+                    and hp_res.broke_enemy_hero_shield
+                ):
                     line_shield = False
                     line_direct = direct_raw
+                # 英雄技能对随从的伤害须保留到后续法术/攻击模拟
+                line_base_enemy = (
+                    line_enemy if (use_hp and inline_hp_step is None) else base_enemy_minions
+                )
+                line_seq = list(seq) + ([inline_hp_step] if inline_hp_step else [])
+                line_full_seq = line_seq + direct_prefix
 
                 def sim_attack_first(
                     _lf=line_fighters, _lm=line_mana, _hd=hp_direct,
-                    _ls=line_shield, _ld=line_direct,
+                    _ls=line_shield, _ld=line_direct, _le=line_base_enemy,
+                    _lsq=line_seq,
                 ) -> Tuple[int, int, int, int, int, int, int]:
                     return self._simulate_line_outcome(
-                        base_enemy_minions, _lf, seq, "attack_first",
+                        _le, _lf, _lsq, "attack_first",
                         spell_mult=spell_mult, defender_shield=_ls,
                         rng=None,
                         available_mana=_lm, hand_charges=charges, hp_direct=_hd,
                         extra_spell_face=_ld,
                     )
 
-                if not seq:
+                if not line_seq:
                     candidates = [
                         (order, self._simulate_line_outcome(
-                            base_enemy_minions, line_fighters, seq, order,
+                            line_base_enemy, line_fighters, line_seq, order,
                             spell_mult=spell_mult, defender_shield=line_shield,
                             available_mana=line_mana, hand_charges=charges,
                             hp_direct=hp_direct, extra_spell_face=line_direct,
                         ))
                         for order in search_orders
                     ]
-                elif self._sequence_sim_needs_mc(seq, line_fighters):
+                elif self._sequence_sim_needs_mc(line_seq, line_fighters):
                     mc_orders = list(search_orders)
                     best_order, sf = self._simulate_random_line_mc_best(
-                        base_enemy_minions, line_fighters, seq, mc_orders,
+                        line_base_enemy, line_fighters, line_seq, mc_orders,
                         spell_mult=spell_mult, defender_shield=line_shield,
                         available_mana=line_mana, hand_charges=charges,
                         hp_direct=hp_direct, extra_spell_face=line_direct,
                     )
                     candidates = [(best_order, sf)]
                 else:
-                    enemy = _clone_combat_states(base_enemy_minions)
+                    enemy = _clone_combat_states(line_base_enemy)
                     fs = _clone_combat_states(line_fighters)
                     spell_res, hp_end, mana_end = apply_spell_sequence_with_meta(
-                        enemy, fs, seq, spell_mult=spell_mult,
+                        enemy, fs, line_seq, spell_mult=spell_mult,
                         enemy_shield=line_shield,
                         gs=self.game_state, player_id=local_id,
                         hero_hp=hero_hp, mana_budget=line_mana,
@@ -3241,16 +3426,17 @@ class LethalChecker:
                         total_sf, _, _, _, _, _, _, _, _ = self._unpack_face_outcome(sf)
                         if total_af > total_sf:
                             candidates = [("attack_first", af)]
-                    if sequence_needs_attack_interleave(seq):
+                    if sequence_needs_attack_interleave(line_seq):
                         fi = self._simulate_attack_interleaved_outcome(
-                            base_enemy_minions, line_fighters, seq,
+                            line_base_enemy, line_fighters, line_seq,
                             spell_mult=spell_mult, defender_shield=line_shield,
                             available_mana=line_mana, hand_charges=charges,
                             hp_direct=hp_direct,
                         )
                         candidates.append(("attack_interleaved", fi))
 
-                line_random = self._sequence_sim_needs_mc(seq, line_fighters)
+                line_random = self._sequence_sim_needs_mc(line_seq, line_fighters)
+                note_hp_name = None if inline_hp_step else (hp_name if use_hp else None)
                 for order, outcome in candidates:
                     (
                         total, minion_face, weapon_face, spell_face,
@@ -3261,7 +3447,7 @@ class LethalChecker:
                         continue
                     if line_random:
                         score = self._mc_mean_line_face_total(
-                            base_enemy_minions, line_fighters, seq, order,
+                            line_base_enemy, line_fighters, line_seq, order,
                             spell_mult=spell_mult, defender_shield=line_shield,
                             available_mana=line_mana, hand_charges=charges,
                             trials=OVERLAY_MC_TRIALS,
@@ -3273,20 +3459,20 @@ class LethalChecker:
 
                     cand_mana = self._estimate_line_mana_spent(
                         player_id, available_mana,
-                        seq=full_seq,
-                        hero_power_name=hp_name if use_hp else None,
+                        seq=line_full_seq,
+                        hero_power_name=note_hp_name,
                         hand_charges=charges,
                     )
                     if not self._overlay_line_mana_ok(
                         player_id, available_mana,
-                        seq=full_seq,
+                        seq=line_full_seq,
                         use_hp=use_hp,
                         hero_power_name=hp_name if use_hp else None,
                         hand_charges=charges,
                     ):
                         continue
                     if self._prefer_spell_line(
-                        score, best_score, full_seq, best_seq, fighters, order, best_order,
+                        score, best_score, line_full_seq, best_seq, fighters, order, best_order,
                         effective_hp=effective_hp,
                         cand_total=total,
                         best_total_int=best_total,
@@ -3308,17 +3494,17 @@ class LethalChecker:
                         best_lifesteal_heal = line_ls
                         best_deathrattle_armor = line_armor
                         best_note = self._format_spell_note(
-                            full_seq, spell_mult, order, hand_charges=charges,
+                            line_full_seq, spell_mult, order, hand_charges=charges,
                             available_mana=available_mana,
-                            hero_power_name=hp_name,
+                            hero_power_name=note_hp_name,
                         )
-                        best_seq = full_seq
+                        best_seq = line_full_seq
                         best_order = order
                         best_hp_name = hp_name
                         best_mana_spent = self._estimate_line_mana_spent(
                             player_id, available_mana,
-                            seq=full_seq,
-                            hero_power_name=hp_name,
+                            seq=line_full_seq,
+                            hero_power_name=note_hp_name,
                             hand_charges=charges,
                         )
 
@@ -3334,14 +3520,14 @@ class LethalChecker:
                             display_battlecry_face = battlecry_face
                             display_hero_power_face = hero_power_face
                             display_hero_buff_face = hero_buff_face
-                            display_seq = full_seq
+                            display_seq = line_full_seq
                             display_order = order
                             display_hp_name = hp_name
                             display_mana_spent = cand_mana
                             display_note = self._format_spell_note(
-                                full_seq, spell_mult, order, hand_charges=charges,
+                                line_full_seq, spell_mult, order, hand_charges=charges,
                                 available_mana=available_mana,
-                                hero_power_name=hp_name,
+                                hero_power_name=note_hp_name,
                             )
                     elif (
                         total > display_total
@@ -3360,14 +3546,14 @@ class LethalChecker:
                         display_battlecry_face = battlecry_face
                         display_hero_power_face = hero_power_face
                         display_hero_buff_face = hero_buff_face
-                        display_seq = full_seq
+                        display_seq = line_full_seq
                         display_order = order
                         display_hp_name = hp_name
                         display_mana_spent = cand_mana
                         display_note = self._format_spell_note(
-                            full_seq, spell_mult, order, hand_charges=charges,
+                            line_full_seq, spell_mult, order, hand_charges=charges,
                             available_mana=available_mana,
-                            hero_power_name=hp_name,
+                            hero_power_name=note_hp_name,
                         )
 
         floor_total, floor_board, floor_weapon, floor_hp = (
@@ -4436,6 +4622,9 @@ class LethalChecker:
                     "attacks_left": hero_attacks,
                     "durability": weapon.current_durability,
                     "can_face": hero_weapon_can_face(hero, weapon),
+                    "script_data_num_1": int(
+                        weapon.tags.get("TAG_SCRIPT_DATA_NUM_1", 0) or 0
+                    ),
                 }
                 from .weapon_p0 import stamp_equipped_weapon_effects
                 stamp_equipped_weapon_effects(w_fighter, weapon.card_id or "")
@@ -4487,10 +4676,14 @@ class LethalChecker:
         """存活攻击者剩余可打脸伤害（含未用于清嘲的武器；可选防守方英雄圣盾）"""
         from .rush_combat import inquisitor_face_mirror_hits
 
+        mirror_hits = (
+            inquisitor_face_mirror_hits(fighters, [])
+            if include_inquisitor_mirror else []
+        )
         base_hits = LethalChecker._fighters_face_hits(fighters)
         hits = list(base_hits) + LethalChecker._weapon_aoe_face_hits(fighters)
         if include_inquisitor_mirror:
-            hits = list(inquisitor_face_mirror_hits(fighters, hits))
+            hits = list(hits) + list(mirror_hits)
         return apply_divine_shield_to_hits(hits, defender_shield)
 
     @staticmethod
@@ -4631,6 +4824,11 @@ class LethalChecker:
         fighter["attacks_left"] -= 1
         if fighter.get("kind") == "weapon":
             fighter["durability"] = max(0, fighter.get("durability", 0) - 1)
+            if fighter.get("durability", 0) <= 0:
+                from .weapon_p0 import apply_weapon_break_deathrattle
+                # 清嘲路径：fighters 列表在外层；此处仅有当前 fighter，
+                # 亡语 buff 由调用方在完整 fighters 上补结算（见 _apply_single_attack）
+                fighter["_weapon_broke"] = True
         elif damage_dealt > 0 or not taunt.get("shield"):
             apply_crusader_buff_after_strike(fighter)
 
@@ -4679,7 +4877,11 @@ class LethalChecker:
         was_alive = target.get("health", 0) > 0
         heal = self._apply_single_attack_core(fighter, target)
 
-        if fighter.get("kind") == "weapon" and enemy_board is not None and fighters is not None:
+        if (
+            fighter.get("kind") in ("weapon", "hero")
+            and enemy_board is not None
+            and fighters is not None
+        ):
             if self._taunt_is_dead(target):
                 resolve_minion_death(target, enemy_board, fighters)
                 remove_dead_taunts(enemy_board)
@@ -4687,16 +4889,21 @@ class LethalChecker:
                 self, target, enemy_board=enemy_board, fighters=fighters,
                 defender_shield=False,
             )
-            from .weapon_p0 import after_hero_weapon_attack
-            heal += after_hero_weapon_attack(
-                fighter, target, enemy_board, fighters, enemy_shield=False,
-            )
-            aoe = int(fighter.get("hero_aoe_on_attack", 0) or 0)
-            if aoe > 0:
-                from .eudora_loot import apply_hero_aoe_after_attack
-                heal += apply_hero_aoe_after_attack(
-                    enemy_board, fighters, aoe,
+            if fighter.get("kind") == "weapon":
+                from .weapon_p0 import after_hero_weapon_attack
+                heal += after_hero_weapon_attack(
+                    fighter, target, enemy_board, fighters, enemy_shield=False,
                 )
+                if fighter.get("_weapon_broke") or int(fighter.get("durability", 0) or 0) <= 0:
+                    from .weapon_p0 import apply_weapon_break_deathrattle
+                    apply_weapon_break_deathrattle(fighter, fighters, rng=rng)
+                    fighter.pop("_weapon_broke", None)
+                aoe = int(fighter.get("hero_aoe_on_attack", 0) or 0)
+                if aoe > 0:
+                    from .eudora_loot import apply_hero_aoe_after_attack
+                    heal += apply_hero_aoe_after_attack(
+                        enemy_board, fighters, aoe,
+                    )
             return heal
 
         if enemy_board is not None and fighters is not None and fighter.get("kind") == "minion":
@@ -4752,7 +4959,24 @@ class LethalChecker:
         def _swing_key(idx: int) -> tuple:
             f = fs[idx]
             rush_only = 0 if (f.get("rush") and not f.get("can_face", True)) else 1
-            return (rush_only, int(f.get("atk", 0) or 0), idx)
+            # 场上有审判官跟刀时：英雄/武器打嘲讽会顺带跟刀并耗尽挥击，应留给打脸
+            hero_swing = 0
+            if f.get("kind") in ("weapon", "hero") and any(
+                x.get("mirrors_hero_attack") and int(x.get("health", 0) or 0) > 0
+                for x in fs
+            ):
+                hero_swing = 1
+            # 战斗邪犬会被反击打死时靠后（留给英雄触发 +1 后再打脸）
+            from .rush_combat import is_battlefiend_card_id
+            dies = 0
+            if (
+                target is not None
+                and is_battlefiend_card_id(str(f.get("card_id") or ""))
+                and not f.get("shield")
+                and int(f.get("health", 0) or 0) <= int(target.get("atk", 0) or 0)
+            ):
+                dies = 1
+            return (rush_only, hero_swing, dies, int(f.get("atk", 0) or 0), idx)
 
         guard = 0
         while True:

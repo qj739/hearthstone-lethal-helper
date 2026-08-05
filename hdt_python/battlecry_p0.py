@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import random
 from copy import deepcopy
-from typing import Callable, List, Optional, TYPE_CHECKING
+from typing import Callable, List, Optional, Tuple, TYPE_CHECKING
 
 from .battlecry_board import _register_bc
 from .board_damage import hand_minion_attack, hand_minion_health
@@ -384,6 +384,97 @@ def _apply_ball_hog(t, f, *, mult, enemy_shield, **_kw):
         t, f, 3 * mult, hits=1, enemy_shield=enemy_shield, self_lifesteal=True,
         **_kw,
     )
+
+
+def _hero_attacked_this_turn_for_bladebound(
+    *,
+    gs=None,
+    player_id=None,
+    fighters=None,
+    **kw,
+) -> bool:
+    """刃缚精锐：本回合英雄是否已攻击（实战标签或模拟先攻挥击）。"""
+    if kw.get("hero_attacked_this_sim"):
+        return True
+    from .rush_combat import fighters_hero_attacked_this_sim
+
+    if fighters and fighters_hero_attacked_this_sim(fighters):
+        return True
+    if gs is not None and player_id is not None:
+        from .board_damage import attacks_this_turn
+
+        hero = gs.get_hero(player_id)
+        if hero is not None and attacks_this_turn(hero) > 0:
+            return True
+    return False
+
+
+def _apply_bladebound_elite(t, f, *, mult, enemy_shield, **kw):
+    """刃缚精锐：本回合英雄攻击过后，造成 4 点伤害。"""
+    if not _hero_attacked_this_turn_for_bladebound(fighters=f, **kw):
+        return SpellApplyResult()
+    return _apply_optimal_single_target_damage(
+        t, f, 4 * mult, enemy_shield=enemy_shield,
+    )
+
+
+def _apply_origami_crane(t, f, *, mult, enemy_shield, card=None, **_kw):
+    """折纸仙鹤：嘲讽，战吼与另一个随从交换生命值（取最优目标）。"""
+    atk = hand_minion_attack(card) if card is not None else 0
+    hp = hand_minion_health(card) if card is not None else 0
+    if atk <= 0:
+        atk = 4
+    if hp <= 0:
+        hp = 1
+    _summon_friendly_fighter(
+        f, atk * mult, hp * mult, taunt=True, card_id="TOY_895",
+    )
+    crane = f[-1]
+    crane_eid = crane.get("entity_id")
+
+    pools: List[Tuple[str, int]] = []
+    for i, m in enumerate(t):
+        if m.get("kind") == "hero":
+            continue
+        if int(m.get("health", 0) or 0) <= 0:
+            continue
+        pools.append(("enemy", i))
+    for i, m in enumerate(f):
+        if m.get("entity_id") == crane_eid:
+            continue
+        if m.get("kind") != "minion" or int(m.get("health", 0) or 0) <= 0:
+            continue
+        pools.append(("friendly", i))
+    if not pools:
+        return SpellApplyResult()
+
+    best_score = -1
+    best_pool: Optional[Tuple[str, int]] = None
+    for pool, idx in pools:
+        t2 = deepcopy(t)
+        f2 = deepcopy(f)
+        crane2 = next((u for u in f2 if u.get("entity_id") == crane_eid), None)
+        other = t2[idx] if pool == "enemy" else f2[idx]
+        if crane2 is None or int(other.get("health", 0) or 0) <= 0:
+            continue
+        h1 = int(crane2.get("health", 0) or 0)
+        h2 = int(other.get("health", 0) or 0)
+        crane2["health"] = h2
+        other["health"] = h1
+        score = project_board_face_after_spell(t2, f2, enemy_shield)
+        if score > best_score:
+            best_score = score
+            best_pool = (pool, idx)
+
+    if best_pool is None:
+        return SpellApplyResult()
+    pool, idx = best_pool
+    other = t[idx] if pool == "enemy" else f[idx]
+    h1 = int(crane.get("health", 0) or 0)
+    h2 = int(other.get("health", 0) or 0)
+    crane["health"] = h2
+    other["health"] = h1
+    return SpellApplyResult()
 
 
 def _apply_tidal_revenant(t, f, *, mult, enemy_shield, **_kw):
@@ -1201,6 +1292,8 @@ def _register_p0_battlecry() -> None:
         (("TTN_457",), 3, "悼词宣诵者", _apply_eulogizer, False),
         # 最低血并列时随机目标，须走 MC 概率（勿标确定斩）
         (("TOY_642",), 4, "球霸野猪人", _apply_ball_hog, True),
+        (("BT_495", "TOY_913t3"), 5, "刃缚精锐", _apply_bladebound_elite, False),
+        (("TOY_895",), 4, "折纸仙鹤", _apply_origami_crane, False),
         (("TID_716",), 8, "潮汐亡魂", _apply_tidal_revenant, False),
         (("TTN_456",), 2, "蔽刺触手", _apply_thornveil, True),
         (("RLK_915",), 3, "琥珀雏龙", _apply_amber_whelp, False),

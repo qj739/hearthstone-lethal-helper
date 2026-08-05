@@ -45,6 +45,19 @@ def _register_hero_power(defn: BoardSpellDef) -> None:
         BOARD_HERO_POWER[cid] = defn
 
 
+def hero_power_should_inline_in_sequence(defn: BoardSpellDef) -> bool:
+    """点伤类英雄技能应插入法术序列（可先换血/解嘲再点），不要只在序列前结算。"""
+    name = defn.name or ""
+    if name in ("跃动的南瓜", "火焰冲击", "稳固射击", "虚空之刺"):
+        return True
+    cids = set(defn.card_ids or ())
+    if cids & {"TOY_829hp", "TOY_829hp3"}:
+        return True
+    if any(str(c).startswith("__mage_fireblast") for c in cids):
+        return True
+    return False
+
+
 def dk_ghoul_charge_stats(card_id: str) -> Optional[Tuple[int, int]]:
     """死亡骑士食尸鬼冲锋：召唤冲锋食尸鬼 (攻, 血)。"""
     if not card_id:

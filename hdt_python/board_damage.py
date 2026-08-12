@@ -602,6 +602,13 @@ def hand_minion_cost(entity: "Entity") -> int:
 
 
 def hand_minion_attack(entity: "Entity") -> int:
+    """
+    手牌随从攻击力。
+    优先 ATK：发现变身材（如橱窗看客）会写 ATK，479 常残留原牌面攻击。
+    """
+    v_atk = entity.tags.get("ATK")
+    if v_atk is not None:
+        return _clamp_attack(int(v_atk))
     atk = effective_attack_from_tags(entity.tags)
     if atk > 0:
         return atk

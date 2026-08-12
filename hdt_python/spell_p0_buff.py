@@ -294,6 +294,60 @@ def _apply_reliable_companion(
     return SpellApplyResult()
 
 
+def _pick_best_silver_hand_recruit(
+    fighters: List[dict],
+    gs=None,
+    player_id=None,
+):
+    """晋升目标：可指定的白银之手新兵中，优先本回合可出手、攻击最高者。"""
+    from .spell_board import (
+        _friendly_spell_target_minions,
+        is_silver_hand_recruit_card_id,
+    )
+
+    cands = [
+        item
+        for item in _friendly_spell_target_minions(fighters, gs, player_id)
+        if is_silver_hand_recruit_card_id(item[2].get("card_id"))
+    ]
+    if not cands:
+        return None
+    return max(
+        cands,
+        key=lambda item: (
+            1 if int(item[2].get("attacks_left", 0) or 0) > 0 else 0,
+            int(item[2].get("atk", 0) or 0)
+            * max(int(item[2].get("attacks_left", 0) or 0), 1),
+            int(item[2].get("atk", 0) or 0),
+        ),
+    )
+
+
+def _apply_promotion(
+    taunts,
+    fighters,
+    *,
+    mult,
+    enemy_shield,
+    spell_power=0,
+    gs=None,
+    player_id=None,
+    **_kw,
+) -> SpellApplyResult:
+    """晋升：使一个白银之手新兵获得 +3/+3 和嘲讽。"""
+    picked = _pick_best_silver_hand_recruit(fighters, gs=gs, player_id=player_id)
+    if picked is None:
+        return SpellApplyResult()
+    _apply_buff_to_spell_target(
+        fighters,
+        picked,
+        bonus_atk=_sd(3, mult=mult, spell_power=spell_power),
+        bonus_health=_sd(3, mult=mult, spell_power=spell_power),
+        grant_taunt=True,
+    )
+    return SpellApplyResult()
+
+
 def _apply_hand_of_adal(
     taunts,
     fighters,
@@ -391,6 +445,33 @@ def _apply_sunscreen(
     return SpellApplyResult()
 
 
+def _apply_silvermoon_portal(
+    taunts,
+    fighters,
+    *,
+    mult,
+    enemy_shield,
+    spell_power=0,
+    gs=None,
+    player_id=None,
+    **_kw,
+) -> SpellApplyResult:
+    """
+    银月城传送门：使一个随从获得 +2/+2；随机召唤一个 2 费随从。
+    斩杀只模拟友方 +2 攻（随机召唤同回合通常不能打脸，不计入）。
+    """
+    picked = _pick_best_spell_target_fighter(fighters, gs=gs, player_id=player_id)
+    if picked is None:
+        return SpellApplyResult()
+    _apply_buff_to_spell_target(
+        fighters,
+        picked,
+        bonus_atk=_sd(2, mult=mult, spell_power=spell_power),
+        bonus_health=_sd(2, mult=mult, spell_power=spell_power),
+    )
+    return SpellApplyResult()
+
+
 def _apply_anti_magic_shell(
     taunts,
     fighters,
@@ -454,6 +535,8 @@ def _register_p0_buff() -> None:
         (("WW_027",), 2, "可靠陪伴", _apply_reliable_companion, False),
         (("MAW_021", "CORE_MAW_021"), 3, "问心无愧", _apply_reliable_companion, False),
         (("CORE_BT_292", "BT_292"), 2, "阿达尔之手", _apply_hand_of_adal, False),
+        (("REV_842", "CORE_REV_842"), 1, "晋升", _apply_promotion, False),
+        (("KAR_077", "CORE_KAR_077", "WON_309"), 3, "银月城传送门", _apply_silvermoon_portal, False),
 
         (("CORE_UNG_952", "UNG_952"), 5, "剑龙骑术", _apply_spikeridged_steed, False),
         (("JAIL_447t",), 4, "侦探服", _apply_detectives_clothes, False),

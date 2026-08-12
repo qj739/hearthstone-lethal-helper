@@ -363,6 +363,7 @@ CLEAR_TARGETED_POINTED_SPELL_IDS = frozenset({
 SPELL_REQUIRES_ENEMY_MINION = frozenset({
     "TTN_853",  # 审判恶徒
     "CS1_130", "CORE_CS1_130",  # 神圣惩击：只能打随从
+    "REV_369", "CORE_REV_369",  # 间接伤害：须有敌方随从
 })
 
 # 须指定友方随从方可打出
@@ -373,7 +374,26 @@ SPELL_REQUIRES_FRIENDLY_MINION = frozenset({
     "CORE_BT_292", "BT_292",  # 阿达尔之手（斩杀搜索只对友方）
     "JAIL_913",  # 拦住他们！
     "ETC_201", "ETC_201t", "ETC_201t2",  # 一串香蕉
+    "REV_842", "CORE_REV_842",  # 晋升：白银之手新兵
+    "KAR_077", "CORE_KAR_077", "WON_309",  # 银月城传送门（斩杀只 buff 友方）
 })
+
+# 须指定友方白银之手新兵方可打出
+SPELL_REQUIRES_SILVER_HAND_RECRUIT = frozenset({
+    "REV_842", "CORE_REV_842",  # 晋升
+})
+
+
+def is_silver_hand_recruit_card_id(card_id: Optional[str]) -> bool:
+    """白银之手新兵：CS2_101t / CS2_101t2…（含 CORE_/VAN_ 前缀）。"""
+    cid = (card_id or "").strip()
+    if not cid:
+        return False
+    for prefix in ("CORE_", "VAN_"):
+        if cid.startswith(prefix):
+            cid = cid[len(prefix):]
+            break
+    return cid.startswith("CS2_101t")
 
 
 
@@ -400,6 +420,22 @@ def friendly_board_has_spell_target_minion(
     board_view = gs.get_overlay_board(player_id)
     fighters = lc._build_fighters(board_view, player_id)
     return bool(_friendly_spell_target_minions(fighters, gs, player_id))
+
+
+def friendly_board_has_silver_hand_recruit(
+    gs: "GameState",
+    player_id: int,
+) -> bool:
+    """己方场面是否存在可被法术指定的白银之手新兵。"""
+    from .lethal_checker import LethalChecker
+
+    lc = LethalChecker(gs)
+    board_view = gs.get_overlay_board(player_id)
+    fighters = lc._build_fighters(board_view, player_id)
+    for _src, _key, unit in _friendly_spell_target_minions(fighters, gs, player_id):
+        if is_silver_hand_recruit_card_id(unit.get("card_id")):
+            return True
+    return False
 
 
 def pick_judge_unworthy_target(taunts: List[dict]) -> Optional[dict]:
@@ -1245,8 +1281,9 @@ def _apply_buff_to_spell_target(
     bonus_atk: int,
     bonus_health: int,
     grant_rush: bool = False,
+    grant_taunt: bool = False,
 ) -> None:
-    """对单个可指定友方随从施加攻/血增益（可选赋予突袭）。"""
+    """对单个可指定友方随从施加攻/血增益（可选赋予突袭/嘲讽）。"""
     src, key, unit = picked
     if src == "fighter":
         i = int(key)
@@ -1255,6 +1292,8 @@ def _apply_buff_to_spell_target(
         fighters[i]["health"] = fighters[i].get("health", 0) + bonus_health
         if grant_rush:
             _grant_rush_on_fighter(fighters[i])
+        if grant_taunt:
+            fighters[i]["taunt"] = True
         return
     eid = key
     for i, f in enumerate(fighters):
@@ -1264,6 +1303,8 @@ def _apply_buff_to_spell_target(
             fighters[i]["health"] = fighters[i].get("health", 0) + bonus_health
             if grant_rush:
                 _grant_rush_on_fighter(fighters[i])
+            if grant_taunt:
+                fighters[i]["taunt"] = True
             return
     # 未在 fighters 中：仅记录 buff 后的身材；突袭可解场但不能打脸
     buffed = dict(unit)
@@ -1276,6 +1317,8 @@ def _apply_buff_to_spell_target(
     else:
         buffed["attacks_left"] = 0
         buffed["can_face"] = False
+    if grant_taunt:
+        buffed["taunt"] = True
     fighters.append(buffed)
 
 
@@ -2006,6 +2049,11 @@ _SPELL_SIM_TIER_OVERRIDES: Dict[str, SpellSimTier] = {
     "WW_027": SpellSimTier.UTILITY,             # 可靠陪伴 +2/+3
     "BT_292": SpellSimTier.UTILITY,             # 阿达尔之手 +2/+1
     "CORE_BT_292": SpellSimTier.UTILITY,
+    "REV_842": SpellSimTier.UTILITY,            # 晋升：白银之手新兵 +3/+3
+    "CORE_REV_842": SpellSimTier.UTILITY,
+    "KAR_077": SpellSimTier.UTILITY,            # 银月城传送门 +2/+2
+    "CORE_KAR_077": SpellSimTier.UTILITY,
+    "WON_309": SpellSimTier.UTILITY,
 
     "ETC_210": SpellSimTier.DIRECT_FACE,        # 通灵最强音（脚本伤害）
     "VAC_427": SpellSimTier.DIRECT_FACE,        # 甜筒殡淇淋 3 直伤
@@ -2023,6 +2071,8 @@ _SPELL_SIM_TIER_OVERRIDES: Dict[str, SpellSimTier] = {
     "REV_290": SpellSimTier.UTILITY,            # 赎罪教堂 +2/+1
     "CORE_REV_290": SpellSimTier.UTILITY,
     "JAIL_445": SpellSimTier.DIRECT_FACE,       # 骨刃乱舞 3(+3) 随机敌人
+    "REV_369": SpellSimTier.CLEAR_AND_FACE,     # 间接伤害：随机随从+溢出打脸
+    "CORE_REV_369": SpellSimTier.CLEAR_AND_FACE,
     "EX1_277": SpellSimTier.DIRECT_FACE,        # 奥术飞弹 3 随机所有敌人
     "CORE_EX1_277": SpellSimTier.DIRECT_FACE,
     "VAN_EX1_277": SpellSimTier.DIRECT_FACE,
@@ -3123,6 +3173,9 @@ def hand_board_spells(
                     continue
             if any(c in SPELL_REQUIRES_FRIENDLY_MINION for c in defn.card_ids):
                 if not friendly_board_has_spell_target_minion(gs, player_id):
+                    continue
+            if any(c in SPELL_REQUIRES_SILVER_HAND_RECRUIT for c in defn.card_ids):
+                if not friendly_board_has_silver_hand_recruit(gs, player_id):
                     continue
             result.append((card, defn, cost))
 

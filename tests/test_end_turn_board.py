@@ -708,7 +708,17 @@ def test_chatty_bartender_needs_secret():
 
 
 def test_priestess_of_fury():
-    """愤怒的女祭司：乐观上界 +6 打脸。"""
+    """愤怒的女祭司：6 伤随机分配所有敌人；空场全打脸，有随从时走随机。"""
+    import random
+
+    from hdt_python.end_turn_board import EtKind, _resolve_end_turn_def, end_turn_uses_random
+
+    for cid in ("BT_493", "CORE_BT_493", "TOY_400t5"):
+        defn = _resolve_end_turn_def(cid)
+        assert defn is not None, cid
+        assert defn.kind == EtKind.RANDOM_SPLIT_ENEMIES
+        assert defn.uses_random, cid
+
     gs = GameState()
     gs.local_player_id = 1
     gs.opponent_player_id = 2
@@ -716,10 +726,52 @@ def test_priestess_of_fury():
     _hero(gs, 1, 1)
     _hero(gs, 2, 2)
     _minion_db(gs, 10, 1, "CORE_BT_493", can_attack=False)
+    assert end_turn_uses_random(_board_entities(gs, 1))
 
-    face, _ = end_turn_face_damage(_board_entities(gs, 1), [], False)
-    assert face == 6, f"expected 6, got {face}"
-    print("OK priestess +6", face)
+    # 空场：6 点全打脸
+    face_empty, _ = end_turn_face_damage(
+        _board_entities(gs, 1), [], False, rng=random.Random(0),
+    )
+    assert face_empty == 6, face_empty
+
+    # 有高血随从：随机会打到随从，打脸期望 < 6
+    faces = [
+        end_turn_face_damage(
+            _board_entities(gs, 1),
+            [{"kind": "minion", "health": 10, "atk": 1, "shield": False, "taunt": False}],
+            False,
+            rng=random.Random(i),
+        )[0]
+        for i in range(120)
+    ]
+    assert min(faces) < max(faces), faces
+    assert min(faces) < 6, min(faces)
+    assert max(faces) >= 4, max(faces)
+    # 1 随从 + 英雄：期望打脸 = 6 * 1/2 = 3
+    assert 2.0 < sum(faces) / len(faces) < 4.5, sum(faces) / len(faces)
+
+    # Overlay：有敌方随从时走 MC，uses_random
+    lc = LethalChecker(gs)
+    _set_local_turn(gs, 1)
+    _minion(gs, 20, 2, 1, 10, card_id="CS2_182", can_attack=False)
+    total = lc.overlay_board_face_damage()
+    mc_max, prob, uses_random, _top = lc.overlay_face_stats()
+    assert uses_random, (total, lc.overlay_spell_note())
+    fatigue = lc.overlay_fatigue_face()
+    # 女祭司刚上场不能攻；峰值 = 回合结束最多 6 + 可能的疲劳
+    assert mc_max <= 6 + fatigue, (mc_max, total, fatigue)
+    print(
+        "OK priestess random split",
+        face_empty,
+        "avg",
+        round(sum(faces) / len(faces), 2),
+        "mc",
+        mc_max,
+        "p",
+        round(prob, 2),
+        "fatigue",
+        fatigue,
+    )
 
 
 def test_runaway_blackwing_end_turn_never_faces():

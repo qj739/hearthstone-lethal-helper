@@ -88,4 +88,42 @@ def board_location_plays(
     return result
 
 
+def hand_location_cost(entity: "Entity") -> int:
+    """手牌地标费用（含 4472 修正）。"""
+    from .board_damage import hand_minion_cost
+
+    if "4472" in entity.tags:
+        try:
+            return max(0, int(entity.tags.get("4472") or 0))
+        except (TypeError, ValueError):
+            pass
+    return hand_minion_cost(entity)
+
+
+def hand_location_plays(
+    gs: "GameState", player_id: int, available_mana: int,
+) -> List[Tuple["Entity", BoardSpellDef, int]]:
+    """手牌地标：打出后当回合可激活（与实战 Options 一致），费用=手牌费，效果=地标使用。
+
+    斩杀模拟把「打出+使用」合成一步，避免只枚举场上已就绪地标而漏掉手牌赎罪教堂等。
+    """
+    from .location_p0 import location_has_valid_target
+
+    result: List[Tuple[Entity, BoardSpellDef, int]] = []
+    for card in gs.get_hand(player_id):
+        cid = card.card_id or ""
+        if entity_cardtype(card) != "LOCATION" and get_location_def(cid) is None:
+            continue
+        defn = get_location_def(cid)
+        if not defn:
+            continue
+        cost = hand_location_cost(card)
+        if cost > available_mana:
+            continue
+        if not location_has_valid_target(defn, gs, player_id):
+            continue
+        result.append((card, defn, cost))
+    return result
+
+
 from . import location_p0  # noqa: E402, F401

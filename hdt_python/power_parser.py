@@ -640,6 +640,9 @@ class PowerLogParser(LogWatcher):
         self._FULL_ENTITY_BRACKET_OVERRIDE_ZONES = frozenset({
             "GRAVEYARD", "REMOVEDFROMGAME", "DECK", "HAND", "SECRET",
         })
+        # PowerTaskList 是动画侧滞后重放，常把 GameState 已结算的血量/护甲盖回中间态
+        self._from_power_tasklist = False
+        self._TASKLIST_SKIP_TAGS = frozenset({"DAMAGE", "ARMOR"})
         self.lines_processed = 0
         self._last_create_game_line = -100000
         self._game_end_emitted = False
@@ -684,7 +687,9 @@ class PowerLogParser(LogWatcher):
         # 提取日志内容（跳过时间戳部分）
         # 格式: D 11:51:58.2141702 GameState.DebugPrintPower() - ...
         # 或: D 11:51:58.2141702 PowerTaskList.DebugPrintPower() - ...
+        self._from_power_tasklist = False
         if line.startswith("D ") and "DebugPrintPower()" in line:
+            self._from_power_tasklist = "PowerTaskList" in line
             # 找到 " - " 之后的内容
             idx = line.find(" - ")
             if idx != -1:
@@ -1378,6 +1383,14 @@ class PowerLogParser(LogWatcher):
             int_value = int(value)
         except ValueError:
             pass
+
+        # PowerTaskList 动画重放滞后：勿用中间态 DAMAGE/ARMOR 覆盖 GameState 终态
+        # （例：吸血两次后 GameState=10，TaskList 重放第一次吸血结果=11 → 假斩杀）
+        if (
+            self._from_power_tasklist
+            and tag in self._TASKLIST_SKIP_TAGS
+        ):
+            return
 
         if (
             tag == "ZONE_POSITION"

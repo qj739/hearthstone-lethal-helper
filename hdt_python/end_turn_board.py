@@ -89,10 +89,13 @@ END_TURN_BY_CARD: Dict[str, EndTurnDef] = {
         EtKind.ALL_ENEMIES_DAMAGE, amount=2, name="亮铜之翼",
     ),
     "CORE_BT_493": EndTurnDef(  # 7费 6/7
-        EtKind.RANDOM_SPLIT_ENEMIES, amount=6, name="愤怒的女祭司",
+        EtKind.RANDOM_SPLIT_ENEMIES, amount=6, uses_random=True, name="愤怒的女祭司",
     ),
     "BT_493": EndTurnDef(  # 7费 6/7
-        EtKind.RANDOM_SPLIT_ENEMIES, amount=6, name="愤怒的女祭司",
+        EtKind.RANDOM_SPLIT_ENEMIES, amount=6, uses_random=True, name="愤怒的女祭司",
+    ),
+    "TOY_400t5": EndTurnDef(  # 奇利亚斯衍生
+        EtKind.RANDOM_SPLIT_ENEMIES, amount=6, uses_random=True, name="愤怒的女祭司",
     ),
     "CATA_999": EndTurnDef(  # 5费 4/4
         EtKind.HERO_DAMAGE, amount=4, name="土石幼龙",
@@ -492,11 +495,44 @@ def _random_split_enemies_face(
     amount: int,
     enemy_board: List[dict],
     defender_shield: bool,
+    *,
+    rng: Optional[random.Random] = None,
 ) -> int:
-    """随机分配到所有敌人；斩杀模拟乐观上界 = 全部打脸。"""
+    """
+    造成 amount 点伤害，随机逐点分配到所有敌人（敌方随从+英雄）。
+    有 rng：真实随机分配（会改写敌方随从血量/圣盾）。
+    无 rng：乐观上界 = 全部打脸（uses_random 时应由 MC 调用并传入 rng）。
+    """
     if amount <= 0:
         return 0
-    return apply_divine_shield_to_hits([amount], defender_shield)
+    if rng is None:
+        return apply_divine_shield_to_hits([amount], defender_shield)
+
+    from .combat_sim import unit_is_dormant
+
+    face = 0
+    shield = defender_shield
+    for _ in range(amount):
+        living = [
+            m for m in enemy_board
+            if m.get("health", 0) > 0
+            and m.get("kind") not in ("hero", "sim_meta")
+            and not unit_is_dormant(m)
+        ]
+        # 英雄始终可选；池 = 存活随从 + 1
+        pick = rng.randrange(len(living) + 1)
+        if pick >= len(living):
+            hit = apply_divine_shield_to_hits([1], shield)
+            face += hit
+            if shield:
+                shield = False
+            continue
+        target = living[pick]
+        if target.get("shield"):
+            target["shield"] = False
+        else:
+            target["health"] = int(target.get("health", 0) or 0) - 1
+    return face
 
 
 def _entity_alive_on_board(entity) -> bool:
@@ -616,7 +652,9 @@ def _apply_end_turn_def(
     if defn.kind == EtKind.ALL_ENEMIES_DAMAGE:
         return apply_divine_shield_to_hits([defn.amount], defender_shield)
     if defn.kind == EtKind.RANDOM_SPLIT_ENEMIES:
-        return _random_split_enemies_face(defn.amount, enemy_board, defender_shield)
+        return _random_split_enemies_face(
+            defn.amount, enemy_board, defender_shield, rng=rng,
+        )
     if defn.kind == EtKind.RANDOM_ENEMY_MINION:
         # 文本为「敌方随从」：无溢出、不选英雄，场攻贡献恒为 0
         return 0

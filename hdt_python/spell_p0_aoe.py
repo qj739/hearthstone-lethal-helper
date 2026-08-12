@@ -389,6 +389,50 @@ def _apply_avatar_form(taunts, fighters, *, mult, enemy_shield, spell_power=0, *
     return SpellApplyResult()
 
 
+def _apply_collateral_damage(
+    taunts,
+    fighters,
+    *,
+    mult,
+    enemy_shield,
+    spell_power=0,
+    rng=None,
+    **_kw,
+) -> SpellApplyResult:
+    """
+    间接伤害：随机对至多三个敌方随从各造成 $6 点伤害（不重复目标）；
+    超过目标当前生命值的伤害合并命中敌方英雄。圣盾吸收整次命中、无溢出。
+    """
+    from .board_damage import apply_divine_shield_to_hits
+    from .combat_sim import unit_is_dormant
+    from .spell_board import _rng_or_default
+
+    dmg = _sd(6, mult=mult, spell_power=spell_power)
+    cands = [
+        t for t in _living_enemy_board_minions(taunts)
+        if not t.get("spell_immune") and not unit_is_dormant(t)
+    ]
+    if not cands:
+        return SpellApplyResult()
+    roll = _rng_or_default(rng)
+    n = min(3, len(cands))
+    targets = roll.sample(cands, n)
+    excess = 0
+    for t in targets:
+        if t.get("shield"):
+            t["shield"] = False
+            continue
+        hp = max(0, int(t.get("health", 0) or 0))
+        excess += max(0, dmg - hp)
+        _apply_damage(t, dmg, taunts=taunts, fighters=fighters)
+    _remove_dead_taunts(taunts)
+    face = apply_divine_shield_to_hits([excess], enemy_shield) if excess else 0
+    res = SpellApplyResult(direct_face_damage=face)
+    if enemy_shield and excess > 0 and face < excess:
+        res.broke_enemy_hero_shield = True
+    return res
+
+
 def _apply_crescendo(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw) -> SpellApplyResult:
     """渐强声浪：疲劳伤害（无疲劳数据时不计入）。"""
     return SpellApplyResult()
@@ -461,6 +505,7 @@ def _register_p0_aoe() -> None:
         (("TIME_619t2",), 3, "赞达拉惨象", _all_enemies_aoe(2), False, None),
         (("TTN_460",), 3, "致命诛灭", _apply_mortal_eradication, True, None),
         (("JAIL_445",), 2, "骨刃乱舞", _apply_boneblade_flurry, True, None),
+        (("REV_369", "CORE_REV_369"), 8, "间接伤害", _apply_collateral_damage, True, None),
         (("DMF_701", "DMF_701t"), 4, "深水炸弹", _apply_dunk_tank, False, None),
         (("SW_107",), 4, "火热促销", _all_minions_aoe(3), False, None),
         (("CATA_489",), 4, "奥术涌流", _apply_arcane_flow_combined, False, None),

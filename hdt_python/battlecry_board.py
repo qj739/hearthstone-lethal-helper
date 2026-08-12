@@ -142,11 +142,11 @@ def hand_battlecry_minions(
 def hand_all_board_plays(
     gs: "GameState", player_id: int, available_mana: int,
 ) -> List[Tuple["Entity", BoardSpellDef, int]]:
-    """手牌法术 + 武器 + 战吼随从 + 突袭随从 + 连击随从（统一枚举顺序）。"""
+    """手牌法术 + 武器 + 战吼随从 + 突袭随从 + 连击随从 + 场上/手牌地标（统一枚举顺序）。"""
     from .combo_board import hand_combo_minions
     from .damaged_spell_power import hand_damaged_spellpower_minions
     from .end_turn_hand_board import hand_end_turn_minions
-    from .location_board import board_location_plays
+    from .location_board import board_location_plays, hand_location_plays
     from .rush_board import hand_rush_minions
     from .weapon_board import hand_weapons
 
@@ -159,6 +159,7 @@ def hand_all_board_plays(
         + hand_damaged_spellpower_minions(gs, player_id, available_mana)
         + hand_end_turn_minions(gs, player_id, available_mana)
         + board_location_plays(gs, player_id, available_mana)
+        + hand_location_plays(gs, player_id, available_mana)
     )
 
 

@@ -4958,7 +4958,8 @@ class LethalChecker:
 
         def _swing_key(idx: int) -> tuple:
             f = fs[idx]
-            rush_only = 0 if (f.get("rush") and not f.get("can_face", True)) else 1
+            # 不能打脸者优先清嘲（突袭当回合 / 不可挥脸武器），避免浪费可打脸随从
+            cant_face = 0 if not f.get("can_face", True) else 1
             # 场上有审判官跟刀时：英雄/武器打嘲讽会顺带跟刀并耗尽挥击，应留给打脸
             hero_swing = 0
             if f.get("kind") in ("weapon", "hero") and any(
@@ -4966,6 +4967,19 @@ class LethalChecker:
                 for x in fs
             ):
                 hero_swing = 1
+            t_atk = int(target.get("atk", 0) or 0) if target is not None else 0
+            t_hp = int(target.get("health", 0) or 0) if target is not None else 0
+            f_atk = int(f.get("atk", 0) or 0)
+            f_hp = int(f.get("health", 0) or 0)
+            # 会被嘲讽反击打死的随从靠后（保留打脸；武器/英雄用血量池，不在此判死）
+            will_die = 0
+            if (
+                f.get("kind") == "minion"
+                and t_atk > 0
+                and not f.get("shield")
+                and f_hp <= t_atk
+            ):
+                will_die = 1
             # 战斗邪犬会被反击打死时靠后（留给英雄触发 +1 后再打脸）
             from .rush_combat import is_battlefiend_card_id
             dies = 0
@@ -4973,10 +4987,16 @@ class LethalChecker:
                 target is not None
                 and is_battlefiend_card_id(str(f.get("card_id") or ""))
                 and not f.get("shield")
-                and int(f.get("health", 0) or 0) <= int(target.get("atk", 0) or 0)
+                and f_hp <= t_atk
             ):
                 dies = 1
-            return (rush_only, hero_swing, dies, int(f.get("atk", 0) or 0), idx)
+            # 能一击杀掉（无圣盾）的优先，避免 2 攻磨 4 血再送掉脆皮
+            one_shot = 0
+            if target is not None and target.get("shield"):
+                one_shot = 1
+            elif f_atk < t_hp:
+                one_shot = 1
+            return (cant_face, hero_swing, will_die, dies, one_shot, f_atk, idx)
 
         guard = 0
         while True:

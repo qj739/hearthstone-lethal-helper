@@ -41,7 +41,8 @@ _SPELL_OVERRIDES: Dict[str, _SpellSpec] = {
     "TIME_218": _SpellSpec("direct_plus_hero", 1, 1),
     "JAM_013": _SpellSpec("all_other_minions", 1, note="+3/+3友方+1伤全场其他"),
     "END_014": _SpellSpec("face_direct", 3),
-    "REV_369": _SpellSpec("random_enemy_minions", 6, amount2=3, uses_random=True),
+    "REV_369": _SpellSpec("collateral_damage", 6, amount2=3, uses_random=True),
+    "CORE_REV_369": _SpellSpec("collateral_damage", 6, amount2=3, uses_random=True),
     # 灭绝圣物：仅敌方随从，不能打英雄；伤害随圣物强化写在脚本标签
     "REV_834": _SpellSpec("random_enemy_minion_hits", 1, amount2=2, uses_random=True),
     "CORE_REV_834": _SpellSpec("random_enemy_minion_hits", 1, amount2=2, uses_random=True),
@@ -360,6 +361,12 @@ def _classify_battlecry(text: str) -> _SpellSpec:
         return _SpellSpec("destroy_enemy", uses_random=True)
     if "destroy" in bc and "all other" in bc:
         return _SpellSpec("all_other_minions_destroy")
+    # 锈烂蝰蛇/软泥怪等：只拆对方武器，不能当成消灭随从解嘲讽
+    if re.search(r"destroy your opponent'?s weapon", bc):
+        return _SpellSpec("noop", note="摧毁武器")
+    # 「已摧毁的武器」回手/再装备 ≠ 消灭敌方随从
+    if "destroyed weapon" in bc:
+        return _SpellSpec("noop", note="复原武器")
     if "destroy" in bc:
         return _SpellSpec("destroy_enemy")
     if "deal" in bc and dmg:
@@ -417,16 +424,53 @@ def _destroy_damaged_enemies(t, f, *, mult, enemy_shield, **_kw):
 
 
 def _destroy_weak_minion(t, f, amount: int, *, mult, enemy_shield, **_kw):
+    """-N/-N，攻击降至 0 则消灭。按解场后打脸收益选目标（勿只盯最低血）。"""
+    from copy import deepcopy
+
     sb = _sb()
     targets = sb._lethal_target_enemy_minions(t)
     if not targets:
         return sb.SpellApplyResult()
-    best = min(targets, key=lambda u: int(u.get("health", 0)))
     debuff = amount * mult
-    best["atk"] = max(0, int(best.get("atk", 0)) - debuff)
-    best["health"] = max(0, int(best.get("health", 0)) - debuff)
-    if int(best.get("atk", 0)) <= 0:
-        best["health"] = 0
+
+    def _apply_debuff(unit: dict) -> None:
+        unit["atk"] = max(0, int(unit.get("atk", 0)) - debuff)
+        unit["health"] = max(0, int(unit.get("health", 0)) - debuff)
+        if int(unit.get("atk", 0)) <= 0:
+            unit["health"] = 0
+
+    best_score = -1
+    best_eid = None
+    for cand in targets:
+        ts = deepcopy(t)
+        fs = deepcopy(f)
+        target = next(
+            (x for x in ts if x.get("entity_id") == cand.get("entity_id")),
+            None,
+        )
+        if target is None or int(target.get("health", 0) or 0) <= 0:
+            continue
+        _apply_debuff(target)
+        sb._remove_dead_taunts(ts)
+        score = sb.project_board_face_after_spell(ts, fs, enemy_shield) or 0
+        # 同打脸时优先消灭（拆掉高血嘲讽）
+        if int(target.get("health", 0) or 0) <= 0:
+            score += 0.01 * int(cand.get("health", 0) or 0)
+        if score > best_score:
+            best_score = score
+            best_eid = cand.get("entity_id")
+
+    if best_eid is None:
+        # 回退：最低血
+        best = min(targets, key=lambda u: int(u.get("health", 0)))
+        _apply_debuff(best)
+        sb._remove_dead_taunts(t)
+        return sb.SpellApplyResult()
+
+    for unit in t:
+        if unit.get("entity_id") == best_eid:
+            _apply_debuff(unit)
+            break
     sb._remove_dead_taunts(t)
     return sb.SpellApplyResult()
 
@@ -568,6 +612,9 @@ def _make_spell_apply(spec: _SpellSpec) -> Callable:
                 rng=rng,
             )
         return _rem
+    if kind == "collateral_damage":
+        from .spell_p0_aoe import _apply_collateral_damage
+        return _apply_collateral_damage
   # fallback
     def _noop2(*_a, **_k):
         return SpellApplyResult()
@@ -717,12 +764,16 @@ def _register_battlecries(ids: List[str], cards: dict, zh: dict) -> None:
     sb = _sb()
     seen: set[str] = set()
     for cid in ids:
-        if cid in seen or _board_registered(cid, BOARD_BATTLECRY):
+        if cid in seen:
             continue
         seen.add(cid)
         card = cards.get(cid, {})
         text = _card_text(card)
         spec = _BC_OVERRIDES.get(cid) or _classify_battlecry(text)
+        # 已注册但仍标成「摧毁武器」noop：覆盖误标的 destroy_enemy
+        already = _board_registered(cid, BOARD_BATTLECRY)
+        if already and not (spec.kind == "noop" and spec.note == "摧毁武器"):
+            continue
         cost = int(card.get("cost", 0) or 0)
         name = zh.get(cid) or card.get("name") or cid
         impl = spec.note or spec.kind
@@ -735,7 +786,25 @@ def _register_battlecries(ids: List[str], cards: dict, zh: dict) -> None:
         _register_bc(sb.BoardSpellDef(
             (cid,), cost, name, _apply, uses_random=spec.uses_random,
         ))
-        _log("战吼", cid, name, impl)
+        if not already:
+            _log("战吼", cid, name, impl)
+
+
+def _repair_weapon_destroy_battlecries(cards: dict, zh: dict) -> None:
+    """进程内已误注册的「摧毁对方武器」战吼改为 noop（不消灭随从）。"""
+    from .battlecry_board import BOARD_BATTLECRY
+
+    for cid in list(BOARD_BATTLECRY.keys()):
+        card = cards.get(cid) or cards.get(
+            cid[5:] if cid.startswith("CORE_") else f"CORE_{cid}", {}
+        )
+        if not card:
+            continue
+        text = _card_text(card)
+        if not re.search(r"destroy your opponent'?s weapon", text.lower()):
+            continue
+        # 走同一套注册逻辑（覆盖 apply）
+        _register_battlecries([cid], cards, zh)
 
 
 def _register_rush_cards(ids: List[str], cards: dict, zh: dict) -> None:
@@ -846,23 +915,22 @@ def _ensure_board_modules_loaded() -> None:
 def register_arena_season_gap() -> List[Tuple[str, str, str, str]]:
     """注册 ARENA_GAP_REPORT 中全部缺口卡，返回登记日志。"""
     global _BULK_DONE
-    if _BULK_DONE:
-        return list(_REGISTERED_LOG)
     _ensure_board_modules_loaded()
-    _REGISTERED_LOG.clear()
-    sections = _parse_gap_sections()
-    if not sections:
-        _BULK_DONE = True
-        return []
     cards, zh = _load_cards()
-    _register_spells(sections.get("spell", []), cards, zh)
-    _register_battlecries(sections.get("battlecry", []), cards, zh)
-    _register_rush_cards(sections.get("rush", []), cards, zh)
-    _register_weapons(sections.get("weapon", []), cards, zh)
-    _register_combos(sections.get("combo", []), cards, zh)
-    _register_deathrattles(sections.get("deathrattle", []), cards, zh)
-    _register_end_turn(sections.get("end_turn", []), cards, zh)
-    _BULK_DONE = True
+    if not _BULK_DONE:
+        _REGISTERED_LOG.clear()
+        sections = _parse_gap_sections()
+        if sections:
+            _register_spells(sections.get("spell", []), cards, zh)
+            _register_battlecries(sections.get("battlecry", []), cards, zh)
+            _register_rush_cards(sections.get("rush", []), cards, zh)
+            _register_weapons(sections.get("weapon", []), cards, zh)
+            _register_combos(sections.get("combo", []), cards, zh)
+            _register_deathrattles(sections.get("deathrattle", []), cards, zh)
+            _register_end_turn(sections.get("end_turn", []), cards, zh)
+        _BULK_DONE = True
+    # 已跑过 bulk 的进程也要纠正「拆刀→假消灭随从」
+    _repair_weapon_destroy_battlecries(cards, zh)
     return list(_REGISTERED_LOG)
 
 

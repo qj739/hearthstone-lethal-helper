@@ -69,9 +69,11 @@ def _hero_attack_slots_left(
     """本回合英雄剩余可挥次数；None 表示无局面信息（单测乐观按满挥）。
 
     weapon_windfury：即将装备的武器带风怒时，按风怒抬高上限（未攻击→2，已攻1次→1）。
+
+    冰冻角色会错过下一次攻击：攻击后被冻（水元素等）会冻到下回合结束。
+    因此对方回合的 next_turn_preview 也必须尊重 FROZEN，不能乐观满挥
+    （否则求真之锤等攻击后 buff 会假计入下回合斩杀）。
     """
-    if next_turn_preview:
-        return None
     if gs is None or player_id is None:
         return None
     from .board_damage import (
@@ -91,6 +93,8 @@ def _hero_attack_slots_left(
         max_a = max(max_a, 4)
     elif weapon_windfury:
         max_a = max(max_a, 2)
+    if next_turn_preview:
+        return max_a
     used = attacks_this_turn(hero)
     return max(max_a - used, 0)
 

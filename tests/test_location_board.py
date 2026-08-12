@@ -299,6 +299,115 @@ def test_erupting_volcano_after_fire_spell_in_sequence():
     print("OK volcano 6 after fire spell in seq", res.direct_face_damage)
 
 
+def _hand_location(gs, eid, pid, card_id="REV_290", cost=3):
+    loc = gs.get_entity(eid)
+    loc.cardtype = "LOCATION"
+    loc.controller = pid
+    loc.zone = "HAND"
+    loc.card_id = card_id
+    loc.health = 3
+    loc.tags.update({
+        "ZONE": "HAND",
+        "CARDTYPE": "LOCATION",
+        "COST": cost,
+        "HEALTH": 3,
+        "ZONE_POSITION": 1,
+    })
+    return loc
+
+
+def _hand_silence(gs, eid, pid, card_id="JAM_022", cost=1):
+    s = gs.get_entity(eid)
+    s.cardtype = "SPELL"
+    s.controller = pid
+    s.zone = "HAND"
+    s.card_id = card_id
+    s.tags.update({
+        "ZONE": "HAND",
+        "CARDTYPE": "SPELL",
+        "COST": cost,
+        "ZONE_POSITION": 2,
+    })
+    return s
+
+
+def test_hand_cathedral_offered_in_plays():
+    from hdt_python.battlecry_board import hand_all_board_plays
+    from hdt_python.location_board import hand_location_plays
+
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.in_game = True
+    _set_local_turn(gs)
+    _hero(gs, 1, 1)
+    _hero(gs, 2, 2)
+    _minion(gs, 10, 1, 5, 5, pos=1, can_attack=True)
+    _hand_location(gs, 40, 1)
+    plays = hand_location_plays(gs, 1, 10)
+    assert len(plays) == 1 and plays[0][0].card_id == "REV_290" and plays[0][2] == 3, plays
+    all_plays = hand_all_board_plays(gs, 1, 10)
+    assert any(c.card_id == "REV_290" and cost == 3 for c, _d, cost in all_plays), all_plays
+    print("OK hand cathedral in plays", plays[0][2])
+
+
+def test_hand_cathedral_plus_silence_lethal():
+    """复盘：邪鬼皇后嘲讽挡脸，场攻 14 vs 15 血；致聋术解嘲 + 手牌赎罪教堂 +2 → 16 斩。"""
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.in_game = True
+    _set_local_turn(gs)
+    _hero(gs, 1, 1)
+    _hero(gs, 2, 2, hp=30)
+    opp = gs.get_entity(2)
+    opp.damage = 14
+    opp.tags["DAMAGE"] = 14  # 16 血：仅沉默场攻 14 不够，需教堂 +2
+    # 避免空牌库把疲劳算进斩杀，掩盖地标贡献
+    for i, eid in enumerate(range(100, 105), start=1):
+        d = gs.get_entity(eid)
+        d.controller = 1
+        d.zone = "DECK"
+        d.tags["ZONE"] = "DECK"
+        d.card_id = f"CS2_0{i}"
+    for i, eid in enumerate(range(110, 115), start=1):
+        d = gs.get_entity(eid)
+        d.controller = 2
+        d.zone = "DECK"
+        d.tags["ZONE"] = "DECK"
+        d.card_id = f"CS2_1{i}"
+    # 场攻 3+4+2+5=14
+    _minion(gs, 10, 1, 3, 3, pos=1, card_id="ETC_543", can_attack=True)
+    _minion(gs, 11, 1, 4, 7, pos=2, card_id="ETC_334", can_attack=True)
+    _minion(gs, 12, 1, 2, 4, pos=3, card_id="JAIL_303", can_attack=True)
+    _minion(gs, 13, 1, 5, 5, pos=4, card_id="TSC_943", can_attack=True)
+    # 嘲讽挡脸
+    t = gs.get_entity(20)
+    t.cardtype = "MINION"
+    t.controller = 2
+    t.zone = "PLAY"
+    t.card_id = "TOY_914"
+    t.atk = 4
+    t.health = 4
+    t.damage = 0
+    t.tags.update({
+        "ZONE": "PLAY", "ATK": 4, "HEALTH": 4, "TAUNT": 1,
+        "ZONE_POSITION": 1, "NUM_TURNS_IN_PLAY": 1,
+    })
+    gs.board_slots.setdefault(2, {})[1] = 20
+    _hand_location(gs, 40, 1)
+    _hand_silence(gs, 41, 1)
+
+    checker = LethalChecker(gs)
+    total, sources, is_lethal = checker.calculate_lethal_potential()
+    face = checker.overlay_board_face_damage()
+    note = checker.overlay_spell_note() or ""
+    assert is_lethal, (total, sources, note, face)
+    assert face >= 16, (total, face, note)
+    assert "赎罪" in note or "教堂" in note, note
+    print("OK hand cathedral + silence lethal", total, face, note)
+
+
 if __name__ == "__main__":
     test_location_ready_and_plays()
     test_location_cooldown_not_offered()
@@ -310,4 +419,6 @@ if __name__ == "__main__":
     test_erupting_volcano_face_without_fire()
     test_erupting_volcano_powered_up_six()
     test_erupting_volcano_after_fire_spell_in_sequence()
+    test_hand_cathedral_offered_in_plays()
+    test_hand_cathedral_plus_silence_lethal()
     print("all passed")

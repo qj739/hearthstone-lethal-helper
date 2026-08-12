@@ -279,6 +279,63 @@ def test_hand_truth_seeker_lethal_before_equip():
     print("OK hand Truth Seeker lethal before equip", total)
 
 
+def test_frozen_hero_no_truth_seeker_buff_current_or_next_turn():
+    """英雄冰冻时不能挥锤：本回合与对方回合下回合预览都不得计入圣骑 +2/+2。"""
+    from copy import deepcopy
+    from hdt_python.spell_board import apply_spell_sequence
+    from hdt_python.weapon_board import get_weapon_def
+
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.active_player_id = 1
+    gs.in_game = True
+    _hero(gs, 1, 1, atk479=0)
+    hero = gs.get_entity(1)
+    hero.tags["FROZEN"] = 1
+    hero.tags["RESOURCES"] = 10
+    hero.tags["RESOURCES_USED"] = 0
+    _hero(gs, 2, 2, hp=30, dmg=19)  # 11 血；无 buff 时场攻仅 4，不能斩
+    _minion(gs, 10, 1, 2, 2)
+    _minion(gs, 11, 1, 2, 2)
+    _hand_weapon(gs, 40, 1)
+
+    checker = LethalChecker(gs)
+    fs = checker._build_fighters(gs.get_overlay_board(1), 1)
+    assert not any(f.get("kind") == "weapon" for f in fs), fs
+    card = gs.get_entity(40)
+    defn = get_weapon_def("JAIL_329")
+    assert defn is not None
+
+    for next_turn in (False, True):
+        fs2 = deepcopy(fs)
+        apply_spell_sequence(
+            [], fs2, [(defn, 7, card)], spell_mult=1, enemy_shield=False,
+            gs=gs, player_id=1, mana_budget=10, next_turn_preview=next_turn,
+        )
+        weapon = next(f for f in fs2 if f.get("kind") == "weapon")
+        assert weapon.get("attacks_left", 0) == 0, (next_turn, weapon)
+        face = LethalChecker._fighters_face_damage(fs2)
+        assert face == 4, (next_turn, face, fs2)
+        # 圣骑未被假 buff
+        pals = [f for f in fs2 if f.get("kind") == "minion"]
+        assert all(f["atk"] == 2 for f in pals), (next_turn, pals)
+
+    total, _, is_lethal = checker.calculate_lethal_potential()
+    assert total < 11, total
+    assert not is_lethal, (total, is_lethal)
+
+    # 对方回合下回合预览：仍冰冻则不能把求真之锤 buff 算进 Overlay
+    gs.active_player_id = 2
+    assert checker.is_opponent_turn()
+    total2, _, is_lethal2 = checker.calculate_lethal_potential()
+    assert total2 < 11, total2
+    assert not is_lethal2, (total2, is_lethal2)
+    face_ov = checker.overlay_board_face_damage()
+    assert face_ov < 11, face_ov
+    print("OK frozen hero skips Truth Seeker buff", total, total2, face_ov)
+
+
 if __name__ == "__main__":
     test_truth_seeker_registered()
     test_equipped_stamps_all_paladin_buff()
@@ -287,4 +344,5 @@ if __name__ == "__main__":
     test_truth_seeker_lethal_vs_11_hp()
     test_board_face_includes_buff()
     test_hand_truth_seeker_lethal_before_equip()
+    test_frozen_hero_no_truth_seeker_buff_current_or_next_turn()
     print("ALL PASS")

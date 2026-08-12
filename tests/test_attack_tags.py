@@ -6,7 +6,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from hdt_python.board_damage import effective_attack_from_tags, _std_attack
+from hdt_python.board_damage import (
+    effective_attack_from_tags,
+    hand_minion_attack,
+    _std_attack,
+)
 from hdt_python.power_parser import Entity
 
 
@@ -14,6 +18,15 @@ def test_atk_over_stale_479():
     """发现等场景：479 滞后时仍以 ATK 为准。"""
     tags = {"ATK": 6, "4472": 6, "479": 1}
     assert effective_attack_from_tags(tags) == 6
+
+
+def test_hand_prefers_atk_over_stale_high_479():
+    """橱窗看客等：手牌 ATK=6 已变身材，479=8 残留牌面时读 6。"""
+    e = Entity(entity_id=1, cardtype="MINION")
+    e.zone = "HAND"
+    e.tags = {"ZONE": "HAND", "ATK": 6, "479": 8, "4472": 6, "HEALTH": 5}
+    e.atk = 8  # 属性可能仍残留
+    assert hand_minion_attack(e) == 6
 
 
 def test_spawn_before_479_set():
@@ -59,6 +72,7 @@ def test_entity_sync_after_tag_change():
 
 if __name__ == "__main__":
     test_atk_over_stale_479()
+    test_hand_prefers_atk_over_stale_high_479()
     test_spawn_before_479_set()
     test_zero_attack_deathrattle_stale_4472()
     test_zero_attack_from_479_only()

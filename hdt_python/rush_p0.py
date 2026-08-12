@@ -150,8 +150,11 @@ def _apply_stoneborn_general(t, f, *, mult, **_kw) -> SpellApplyResult:
 
 
 def _apply_illidari_inquisitor(t, f, *, mult, card=None, **_kw) -> SpellApplyResult:
-    """伊利达雷审判官：8/8 突袭，英雄攻击后跟刀。"""
-    _summon_rush_fighter(f, 8 * mult, 8 * mult, "CS3_020")
+    """伊利达雷审判官：突袭，英雄攻击后跟刀（身材以手牌为准，含发现变身材）。"""
+    if card is not None:
+        _summon_from_hand_card(f, card, mult=mult)
+    else:
+        _summon_rush_fighter(f, 8 * mult, 8 * mult, "CS3_020")
     return SpellApplyResult()
 
 

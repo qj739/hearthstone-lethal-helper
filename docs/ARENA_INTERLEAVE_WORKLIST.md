@@ -1,10 +1,11 @@
 # 攻击穿插清单（随从 + 法术）
 
 > **穿插**：`部分场面随从先攻 → 打出卡牌（战吼/法术）→ 剩余随从再攻/打脸`  
+> **法间穿插**：`法术前缀 → 随从解嘲 → 法术后缀 → 再打脸`（使抹除存在等随机消灭变为必中）  
 > 不能只在 `spell_first`（先法后攻）或 `attack_first`（先攻后法）首尾施放。  
-> 引擎入口：`hdt_python/interleave_board.py` + `lethal_checker._simulate_attack_interleaved_outcome`
+> 引擎入口：`hdt_python/interleave_board.py` + `lethal_checker._simulate_attack_interleaved_outcome` / `_simulate_spell_mid_attack_outcome`
 
-最后更新：2026-06-12
+最后更新：2026-08-14
 
 ---
 
@@ -14,6 +15,7 @@
 |------|--------|-------------|
 | 战吼随从 | 3 | 0 |
 | 法术 | 14（注册 + 引擎穿插路径） | 各法术独立回归用例待补 |
+| 法间穿插 | `TIME_433`/`REV_249` 等 | 炽燃圣光+抹除存在必杀 ✅ |
 
 ---
 

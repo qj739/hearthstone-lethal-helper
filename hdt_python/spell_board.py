@@ -2641,6 +2641,19 @@ def get_board_spell_def(card_id: str) -> Optional[BoardSpellDef]:
     return BOARD_CLEAR_SPELLS.get("CORE_" + card_id)
 
 
+def resolve_playable_defn(card_id: str) -> Optional[BoardSpellDef]:
+    """衍生手牌解析：法术表优先，其次突袭/战吼随从（微缩 TOY_312t 等）。"""
+    defn = get_board_spell_def(card_id)
+    if defn is not None:
+        return defn
+    from .rush_board import get_rush_def
+    defn = get_rush_def(card_id)
+    if defn is not None:
+        return defn
+    from .battlecry_board import get_battlecry_def
+    return get_battlecry_def(card_id)
+
+
 WICKED_STAB_IDS = frozenset({
     "BAR_319", "BAR_319t", "BAR_319t2", "BAR_920", "BAR_921",
 })
@@ -2763,7 +2776,7 @@ def spell_sequence_mana_left(
             res = SpellApplyResult()
 
         if res.add_hand_spell_id:
-            next_defn = get_board_spell_def(res.add_hand_spell_id)
+            next_defn = resolve_playable_defn(res.add_hand_spell_id)
             if next_defn:
                 next_cost = next_defn.base_cost
                 pending.append((
@@ -2772,7 +2785,7 @@ def spell_sequence_mana_left(
                     _SyntheticSpellCard(res.add_hand_spell_id, next_cost),
                 ))
         for sid, scost, sdmg in res.add_hand_pending:
-            next_defn = get_board_spell_def(sid)
+            next_defn = resolve_playable_defn(sid)
             if next_defn:
                 next_cost = scost if scost >= 0 else next_defn.base_cost
                 pending.append((
@@ -3576,7 +3589,7 @@ def _apply_spell_sequence_impl(
                             return total, hp, mana_left
 
                 if res.add_hand_spell_id:
-                    next_defn = get_board_spell_def(res.add_hand_spell_id)
+                    next_defn = resolve_playable_defn(res.add_hand_spell_id)
                     if next_defn:
                         next_cost = next_defn.base_cost
                         pending.append((
@@ -3589,7 +3602,7 @@ def _apply_spell_sequence_impl(
                             ),
                         ))
                 for sid, scost, sdmg in res.add_hand_pending:
-                    next_defn = get_board_spell_def(sid)
+                    next_defn = resolve_playable_defn(sid)
                     if next_defn:
                         pending.append((
                             next_defn,

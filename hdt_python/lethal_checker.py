@@ -29,7 +29,12 @@ from .board_damage import (
     format_hand_charge_label,
 )
 from .battlecry_board import hand_all_board_plays
-from .interleave_board import interleave_note_suffix, sequence_needs_attack_interleave, sequence_has_interleave_spell
+from .interleave_board import (
+    interleave_note_suffix,
+    sequence_needs_attack_interleave,
+    sequence_needs_mid_attack_interleave,
+    sequence_has_interleave_spell,
+)
 from .hero_power_board import (
     has_usable_hero_power,
     usable_hero_power,
@@ -3100,6 +3105,9 @@ class LethalChecker:
         sim_seq = self._combo_seq_for_simulation(best_seq)
         sim_mana = available_mana - int(getattr(self, "_overlay_direct_mana", 0) or 0)
         needs_random = self._line_needs_random(sim_seq, fighters)
+        if best_order == "spell_mid_attack":
+            # 法间穿插仅在随机后缀已退化为必中时胜出
+            needs_random = False
         # 球霸等：场攻计划已使英雄成唯一最低血 → 战吼打脸确定，勿走 MC 把 P 打成 0
         if (
             needs_random
@@ -3285,7 +3293,10 @@ class LethalChecker:
                 effective_hp > 0
                 and best_total >= effective_hp
                 and best_seq is not None
-                and not self._line_needs_random(best_seq, fighters)
+                and (
+                    not self._line_needs_random(best_seq, fighters)
+                    or best_order == "spell_mid_attack"
+                )
                 and self._line_needs_random(seq, fighters)
             ):
                 continue
@@ -3381,14 +3392,34 @@ class LethalChecker:
                         for order in search_orders
                     ]
                 elif self._sequence_sim_needs_mc(line_seq, line_fighters):
-                    mc_orders = list(search_orders)
-                    best_order, sf = self._simulate_random_line_mc_best(
-                        line_base_enemy, line_fighters, line_seq, mc_orders,
-                        spell_mult=spell_mult, defender_shield=line_shield,
-                        available_mana=line_mana, hand_charges=charges,
-                        hp_direct=hp_direct, extra_spell_face=line_direct,
-                    )
-                    candidates = [(best_order, sf)]
+                    mid_forced = False
+                    if (
+                        sequence_needs_mid_attack_interleave(line_seq)
+                        and opp_taunts
+                        and self._board_minion_attack_eids(line_fighters)
+                    ):
+                        mid_out, mid_det = self._simulate_spell_mid_attack_outcome(
+                            line_base_enemy, line_fighters, line_seq,
+                            spell_mult=spell_mult, defender_shield=line_shield,
+                            available_mana=line_mana, hand_charges=charges,
+                            hp_direct=hp_direct, extra_spell_face=line_direct,
+                        )
+                        if (
+                            mid_det
+                            and effective_hp > 0
+                            and mid_out[0] >= effective_hp
+                        ):
+                            candidates = [("spell_mid_attack", mid_out)]
+                            mid_forced = True
+                    if not mid_forced:
+                        mc_orders = list(search_orders)
+                        best_order, sf = self._simulate_random_line_mc_best(
+                            line_base_enemy, line_fighters, line_seq, mc_orders,
+                            spell_mult=spell_mult, defender_shield=line_shield,
+                            available_mana=line_mana, hand_charges=charges,
+                            hp_direct=hp_direct, extra_spell_face=line_direct,
+                        )
+                        candidates = [(best_order, sf)]
                 else:
                     enemy = _clone_combat_states(line_base_enemy)
                     fs = _clone_combat_states(line_fighters)
@@ -3435,9 +3466,12 @@ class LethalChecker:
                         )
                         candidates.append(("attack_interleaved", fi))
 
-                line_random = self._sequence_sim_needs_mc(line_seq, line_fighters)
                 note_hp_name = None if inline_hp_step else (hp_name if use_hp else None)
                 for order, outcome in candidates:
+                    line_random = (
+                        self._sequence_sim_needs_mc(line_seq, line_fighters)
+                        and order != "spell_mid_attack"
+                    )
                     (
                         total, minion_face, weapon_face, spell_face,
                         hero_power_face, hero_buff_face, line_ls, line_armor,
@@ -3746,7 +3780,9 @@ class LethalChecker:
         if spell_mult > 1:
             note += " x2埃提耶识"
         note += interleave_note_suffix(seq, order)
-        if order not in ("attack_interleaved", "faceless_interleaved"):
+        if order not in (
+            "attack_interleaved", "faceless_interleaved", "spell_mid_attack",
+        ):
             if order == "attack_first":
                 note += " 先攻后法"
             else:
@@ -4203,6 +4239,111 @@ class LethalChecker:
                 best_hero_buff = hero_buff_board
 
         return best_total, best_minion, best_weapon, best_spell, best_hp, best_hero_buff
+
+    def _simulate_spell_mid_attack_outcome(
+        self,
+        base_enemy_minions: List[dict],
+        fighters: List[dict],
+        seq: List,
+        *,
+        spell_mult: int,
+        defender_shield: bool,
+        available_mana: Optional[int] = None,
+        hand_charges: Optional[List] = None,
+        hp_direct: int = 0,
+        extra_spell_face: int = 0,
+    ) -> Tuple[Tuple[int, int, int, int, int, int], bool]:
+        """
+        法间穿插：法术前缀 → 部分随从解嘲 → 法术后缀 → 再打脸。
+        若后缀随机消灭在施放时至多 1 个有效目标，则视为确定线（mid_det=True）。
+        """
+        from .spell_board import _living_enemy_board_minions
+
+        charges = hand_charges or []
+        hero_hp = self._my_hero_hp_for_spells()
+        local_id = self.game_state.local_player_id
+        best_outcome = (0, 0, 0, 0, 0, 0)
+        best_det = False
+        n = len(seq)
+        if n < 2:
+            return best_outcome, False
+
+        # 控制组合爆炸：序列过长或可攻随从过多时仍枚举，但子集已有限制
+        max_split = min(n, 4)
+        for k in range(1, max_split):
+            prefix, suffix = seq[:k], seq[k:]
+            if not suffix:
+                continue
+            if self._lethal_budget_expired():
+                break
+
+            enemy0 = _clone_combat_states(base_enemy_minions)
+            fs0 = _clone_combat_states(fighters)
+            pre_res, hero_end, mana_end = apply_spell_sequence_with_meta(
+                enemy0, fs0, prefix, spell_mult=spell_mult,
+                enemy_shield=defender_shield, rng=None,
+                gs=self.game_state, player_id=local_id,
+                hero_hp=hero_hp, mana_budget=available_mana,
+                next_turn_preview=self._hero_power_next_turn(),
+            )
+            after_shield = False if pre_res.broke_enemy_hero_shield else defender_shield
+            taunts0 = self._living_taunt_states(enemy0)
+            attack_eids = self._board_minion_attack_eids(fs0)
+            if not taunts0 or not attack_eids:
+                continue
+
+            for trade_eids in self._attack_interleave_subsets(fs0):
+                if not trade_eids:
+                    continue
+                if self._lethal_budget_expired():
+                    break
+                enemy = _clone_combat_states(enemy0)
+                fs = _clone_combat_states(fs0)
+                _, _, fs, taunts_after = self._run_partial_attack_phase(
+                    fs, self._living_taunt_states(enemy), after_shield,
+                    allowed_eids=trade_eids,
+                    consume_allowed_attacks=True,
+                    enemy_board=enemy,
+                )
+                self._sync_taunt_states_after_attack(enemy, taunts_after)
+
+                living_before_suffix = _living_enemy_board_minions(enemy)
+                suffix_det = True
+                for defn, _, _ in suffix:
+                    if defn.uses_random and len(living_before_suffix) > 1:
+                        suffix_det = False
+                        break
+
+                suf_res, hero_end2, mana_end2 = apply_spell_sequence_with_meta(
+                    enemy, fs, suffix, spell_mult=spell_mult,
+                    enemy_shield=after_shield, rng=None,
+                    gs=self.game_state, player_id=local_id,
+                    hero_hp=hero_end, mana_budget=mana_end,
+                    next_turn_preview=self._hero_power_next_turn(),
+                )
+                spell_res = merge_spell_apply_results(pre_res, suf_res)
+                if extra_spell_face:
+                    spell_res.direct_face_damage += extra_spell_face
+                final_shield = (
+                    False if spell_res.broke_enemy_hero_shield else after_shield
+                )
+                outcome = self._spell_first_face_from_state(
+                    enemy, fs, spell_res, mana_end2, charges, final_shield,
+                    hp_direct,
+                    hero_hp_after_spells=hero_end2,
+                )
+                total = outcome[0]
+                packed = (
+                    outcome[0], outcome[1], outcome[2], outcome[3],
+                    outcome[4], outcome[5] if len(outcome) > 5 else 0,
+                )
+                if total > best_outcome[0] or (
+                    total == best_outcome[0] and suffix_det and not best_det
+                ):
+                    best_outcome = packed
+                    best_det = suffix_det
+
+        return best_outcome, best_det
 
     _simulate_faceless_interleaved_outcome = _simulate_attack_interleaved_outcome
     _faceless_interleave_subsets = _attack_interleave_subsets

@@ -58,6 +58,20 @@ ATTACK_INTERLEAVE_SPELL_IDS: Set[str] = frozenset({
     "DREAM_02",     # 伊瑟拉苏醒
 })
 
+# 法术之间插入换嘲：前缀法术后用随从解嘲，再施放后缀（使随机消灭变为必中等）
+MID_ATTACK_INTERLEAVE_SPELL_IDS: Set[str] = frozenset({
+    "TIME_433",     # 抹除存在：解嘲后只剩 1 目标 → 必中
+    "REV_249",      # 炽燃圣光：常与抹除存在组合
+    "REV_239",      # 窒息暗影
+    "MIS_903",      # 可疑交易
+    "DMF_117",      # 连环灾难
+    "DMF_117t",
+    "DMF_117t2",
+    "TTN_932",      # 混乱吞噬
+    "TIME_712",     # 诛灭暴君
+    "CORE_RLK_087", # 窒息
+})
+
 INTERLEAVE_SPELL_NAMES: Dict[str, str] = {
     "WW_405": "迅疾连射",
     "CFM_603": "疯狂药水",
@@ -188,10 +202,31 @@ def sequence_needs_attack_interleave(sequence) -> bool:
     return False
 
 
+def sequence_has_mid_attack_spell(sequence) -> bool:
+    for defn, _, card in sequence:
+        if _sequence_card_ids(defn, card) & MID_ATTACK_INTERLEAVE_SPELL_IDS:
+            return True
+    return False
+
+
+def sequence_needs_mid_attack_interleave(sequence) -> bool:
+    """
+    启用 spell_mid_attack：法术₁ → 随从解嘲 → 法术₂…
+    序列至少 2 张，且含清场/点杀类注册法术，不含冲突战吼。
+    """
+    if not sequence or len(sequence) < 2:
+        return False
+    if sequence_has_conflicting_battlecry(sequence):
+        return False
+    return sequence_has_mid_attack_spell(sequence)
+
+
 def interleave_note_suffix(sequence, order: str) -> str:
     """overlay 备注后缀。"""
     if order == "faceless_interleaved":
         return " 无面穿插"
+    if order == "spell_mid_attack":
+        return " 法间穿插"
     if order != "attack_interleaved":
         return ""
     if sequence_is_faceless_only(sequence):

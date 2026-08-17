@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 # 与 generate_arena_rush_worklist.collect 同步；动态加载失败时作兜底
 _FALLBACK_RUSH_IDS: Tuple[str, ...] = (
-    "VAC_514", "TOY_516", "TOY_312", "CATA_525", "CS3_020", "MIS_314", "DRG_076",
+    "VAC_514", "TOY_516", "TOY_312", "TOY_312t", "CATA_525", "CS3_020", "MIS_314", "DRG_076",
     "WW_418", "WORK_015", "BAR_896", "TSC_645", "SW_431", "ETC_357", "TTN_713",
     "DAL_047", "WW_326", "CATA_469", "CORE_BT_156", "TTN_042", "TLC_630",
     "CORE_DRG_079", "CATA_153", "VAC_527", "WW_043", "RLK_955", "RLK_604",
@@ -100,6 +100,19 @@ def _summon_from_hand_card(
 
 def _apply_default_rush_minion(t, f, *, mult, card=None, **_kw) -> SpellApplyResult:
     _summon_from_hand_card(f, card, mult=mult)
+    return SpellApplyResult()
+
+
+def _apply_nostalgic_gnome(t, f, *, mult, card=None, **_kw) -> SpellApplyResult:
+    """恋旧的侏儒 TOY_312：突袭上场，并微缩获得 1 费 1/1 突袭 TOY_312t。"""
+    _summon_from_hand_card(f, card, mult=mult)
+    return SpellApplyResult(add_hand_pending=[("TOY_312t", 1, 0)])
+
+
+def _apply_nostalgic_gnome_mini(t, f, *, mult, card=None, **_kw) -> SpellApplyResult:
+    """恋旧的侏儒（微型）TOY_312t：1/1 突袭。"""
+    del card
+    _summon_rush_fighter(f, 1 * mult, 1 * mult, "TOY_312t")
     return SpellApplyResult()
 
 
@@ -228,6 +241,8 @@ def _apply_bargain_bin_buccaneer(
 
 # card_id -> (base_cost, name, apply_fn)
 _RUSH_OVERRIDES = {
+    "TOY_312": (4, "恋旧的侏儒", _apply_nostalgic_gnome),
+    "TOY_312t": (1, "恋旧的侏儒", _apply_nostalgic_gnome_mini),
     "BT_720": (5, "锈骑劫匪", _apply_ruststeed_raider),
     "RLK_916": (4, "胆大的幼龙", _apply_daring_drake),
     "ONY_004": (10, "团本首领奥妮克希亚", _apply_raid_boss_onyxia),

@@ -84,6 +84,8 @@ def fighters_face_hits(fighters: List[dict]) -> List[int]:
 
 
 def fighters_face_damage(fighters: List[dict], defender_shield: bool = False) -> int:
+    from .rush_combat import inquisitor_face_mirror_hits
+
     hits = list(fighters_face_hits(fighters))
     for f in fighters:
         if f.get("kind") != "weapon" or f.get("health", 0) <= 0:
@@ -95,6 +97,7 @@ def fighters_face_damage(fighters: List[dict], defender_shield: bool = False) ->
             continue
         n = min(f.get("attacks_left", 0), f.get("durability", 0))
         hits.extend([aoe] * n)
+    hits = list(hits) + list(inquisitor_face_mirror_hits(fighters, []))
     return apply_divine_shield_to_hits(hits, defender_shield)
 
 
@@ -372,9 +375,16 @@ def exhaust_rush_on_enemy_minions(
     """
     让当回合突袭随从攻击敌方随从（不能打脸）。
     有 score_after 时贪心选得分最高的单次攻击；否则优先打剩余血量最高的随从。
+
+    仅在能提高评分时才出手：否则保留审判官等跟刀体，避免无嘲时去撞高攻怪送死丢跟刀。
     """
     fs = copy.deepcopy(_normalize_fighters(fighters))
     board = copy.deepcopy(enemy_board)
+
+    def _score(f_state: List[dict], b_state: List[dict]) -> int:
+        if score_after is not None:
+            return int(score_after(f_state, b_state) or 0)
+        return int(fighters_face_damage(f_state, defender_shield) or 0)
 
     while True:
         rushes = _rush_fighters(fs)
@@ -382,7 +392,13 @@ def exhaust_rush_on_enemy_minions(
         if not rushes or not targets:
             break
 
-        best_score = -1
+        # 无嘲讽：基线为「不出手」，避免审判官等去撞高攻怪送死丢跟刀。
+        # 有嘲讽：必须推进解场（旧行为），否则会死锁在 face=0。
+        has_taunt = bool(living_taunt_units(board))
+        if has_taunt:
+            best_score = -1
+        else:
+            best_score = _score(fs, board)
         best_pair: Optional[Tuple[List[dict], List[dict]]] = None
 
         for rush in rushes:
@@ -415,11 +431,8 @@ def exhaust_rush_on_enemy_minions(
                     r2, t2, board2, fs2, was_alive_before=was_alive_before,
                 )
                 apply_buff_other_beasts_after_attack(r2, fs2)
-                if score_after is not None:
-                    # 评分不得污染候选局面（否则后续攻击会在已被评分吞掉的状态上继续）
-                    score = score_after(copy.deepcopy(fs2), copy.deepcopy(board2))
-                else:
-                    score = fighters_face_damage(fs2, defender_shield)
+                # 评分不得污染候选局面（否则后续攻击会在已被评分吞掉的状态上继续）
+                score = _score(copy.deepcopy(fs2), copy.deepcopy(board2))
                 if score > best_score:
                     best_score = score
                     best_pair = (fs2, board2)

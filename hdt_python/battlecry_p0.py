@@ -878,8 +878,26 @@ def _apply_backstage_bouncer(t, f, *, mult, enemy_shield, **_kw):
     return SpellApplyResult()
 
 
-def _apply_toy_tarim(t, f, *, mult, enemy_shield, **_kw):
-    return _optimal_set_minion_stats(t, f, 3 * mult, 7 * mult, enemy_shield=enemy_shield)
+def _apply_toy_tarim(t, f, *, mult, enemy_shield, card=None, **_kw):
+    """玩具队长塔林姆：将一个随从变为与本随从相同的攻/血（含手牌 BUFF）。"""
+    default_atk, default_hp = 3, 7
+    cid = (card.card_id if card and card.card_id else "") or "TOY_813"
+    if cid == "TOY_813t" or cid.endswith("_TOY_813t"):
+        default_atk, default_hp = 1, 1
+    atk = hand_minion_attack(card) if card is not None else default_atk
+    hp = hand_minion_health(card) if card is not None else default_hp
+    if atk <= 0:
+        atk = default_atk
+    if hp <= 0:
+        hp = default_hp
+    # 自身上场（嘲讽、失调）；战吼复制的是打出时的实际身材
+    _summon_friendly_fighter(
+        f, atk * mult, hp * max(int(mult), 1),
+        taunt=True, card_id=cid,
+    )
+    return _optimal_set_minion_stats(
+        t, f, atk * mult, hp * max(int(mult), 1), enemy_shield=enemy_shield,
+    )
 
 
 # --- 5. 场面（4）---
@@ -1352,7 +1370,7 @@ def _register_p0_battlecry() -> None:
         (("VAC_701",), 3, "刀剑保养师", _apply_swordshiner, False),
         (("TIME_714",), 6, "时光领主埃博克", _apply_chrono_lord_epoch, False),
         (("JAM_014",), 4, "后台保镖", _apply_backstage_bouncer, False),
-        (("TOY_813",), 5, "玩具队长塔林姆", _apply_toy_tarim, False),
+        (("TOY_813", "TOY_813t"), 5, "玩具队长塔林姆", _apply_toy_tarim, False),
         # 5. 场面
         (("RLK_867",), 2, "维库通灵师", _apply_vrykul_necrolyte, False),
         (("CATA_161",), 3, "残恶梦魇", _apply_gruesome_nightmare, False),

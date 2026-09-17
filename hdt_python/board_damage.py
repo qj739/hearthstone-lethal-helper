@@ -165,8 +165,6 @@ _ENCHANT_NON_ATTACK_SCRIPT_IDS = frozenset({
 # 少数攻加成附魔只写 script、不写 323（如加尔手臂）
 _ENCHANT_SCRIPT_ATTACK_IDS = frozenset({
     "CATA_726te",
-    "EDR_810e",
-    "EDR_810e2",
 })
 
 
@@ -236,10 +234,14 @@ def format_hand_charge_label(
     *,
     prefix: str = "打出",
 ) -> str:
-    """手牌冲锋步骤/备注文案（含双面间谍复制）。"""
+    """手牌冲锋步骤/备注文案（含双面间谍复制、风怒多次挥击）。"""
     name = card_display_name_zh(entity.card_id or "", entity.card_id or "随从")
     copies = 2 if double_agent_summons_copy(gs, player_id, entity) else 1
-    body = f"{name}({atk}攻冲锋)"
+    swings = max(1, attacks_per_turn(entity, is_silenced(entity)))
+    if swings > 1:
+        body = f"{name}({atk}攻冲锋×{swings})"
+    else:
+        body = f"{name}({atk}攻冲锋)"
     if copies > 1:
         body += f"×{copies}"
     return f"{prefix} {body}" if prefix else body
@@ -992,6 +994,17 @@ def _can_attack_minion(
         return False
     if entity.current_health <= 0 or _std_attack(entity, game_state) <= 0:
         return False
+    return _minion_ready_ignoring_attack(entity, active_turn, game_state)
+
+
+def _minion_ready_ignoring_attack(
+    entity: "Entity",
+    active_turn: bool,
+    game_state: Optional["GameState"] = None,
+) -> bool:
+    """忽略当前攻击力：是否具备攻击资格（求真之锤等加攻后可打）。"""
+    if not entity.is_minion or entity.current_health <= 0:
+        return False
     if _tag(entity, "CANT_ATTACK") or _tag(entity, "FROZEN"):
         return False
     if is_dormant(entity, game_state) or is_titan_blocked(entity):
@@ -1023,6 +1036,23 @@ def _can_attack_hero(
     return _is_able_to_attack(
         entity, active_turn, is_weapon=False, is_hero=False, game_state=game_state,
     )
+
+
+def _can_attack_hero_ignoring_attack(
+    entity: "Entity",
+    active_turn: bool,
+    game_state: Optional["GameState"] = None,
+) -> bool:
+    """忽略当前攻击力时是否可打脸（武器加攻后 0 攻随从可出刀）。"""
+    if not entity.is_minion:
+        return False
+    if _rush_blocks_hero_this_turn(entity, active_turn):
+        return False
+    if _tag(entity, "CANT_ATTACK") or _tag(entity, "FROZEN"):
+        return False
+    if is_dormant(entity, game_state) or is_titan_blocked(entity):
+        return False
+    return _minion_ready_ignoring_attack(entity, active_turn, game_state)
 
 
 def build_board_card(
@@ -1349,10 +1379,21 @@ class PlayerBoardView:
         for card in self.cards:
             if not card.entity.is_minion:
                 continue
-            if not card.can_attack_minion and not card.can_attack_hero:
-                continue
             std = card.std_attack
+            can_minion = card.can_attack_minion
+            can_hero = card.can_attack_hero
             if std <= 0:
+                ready = _minion_ready_ignoring_attack(
+                    card.entity, self.active_turn, self.game_state,
+                )
+                if not ready:
+                    continue
+                can_minion = True
+                if not can_hero:
+                    can_hero = _can_attack_hero_ignoring_attack(
+                        card.entity, self.active_turn, self.game_state,
+                    )
+            elif not can_minion and not can_hero:
                 continue
             per_turn = card.attacks_per_turn
             used = (
@@ -1370,7 +1411,7 @@ class PlayerBoardView:
                 "atk": std,
                 "health": max(card.entity.current_health, 1),
                 "attacks_left": remaining,
-                "can_face": card.can_attack_hero,
+                "can_face": can_hero,
                 "beast": entity_is_beast(card.entity),
             }
             if entity_is_paladin(card.entity):
@@ -1420,6 +1461,19 @@ class PlayerBoardView:
                             apply_after_attack_friendly_buffs(
                                 w_fighter, minion_fighters,
                             )
+                            from .weapon_p0 import apply_summon_on_attack
+                            apply_summon_on_attack(w_fighter, minion_fighters)
+                            if w_fighter.get("cannoneers_fire"):
+                                from .end_turn_board import (
+                                    cannoneer_shots_per_fire,
+                                    count_friendly_cannoneers,
+                                )
+                                n_can = count_friendly_cannoneers(minion_fighters)
+                                shots = cannoneer_shots_per_fire(
+                                    fighters=minion_fighters,
+                                )
+                                for _shot in range(n_can * shots):
+                                    hits.append(1)
                             w_fighter["durability"] = max(
                                 0, int(w_fighter.get("durability", 0) or 0) - 1,
                             )

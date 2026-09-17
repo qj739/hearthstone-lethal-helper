@@ -219,6 +219,32 @@ def test_board_face_includes_buff():
     print("OK board face with buff", face)
 
 
+def test_zero_atk_paladin_gets_truth_seeker_buff_face():
+    """0 攻圣骑（点唱机图腾）挥锤后应变 2 攻并计入打脸。
+
+    场面：2 攻随从 + 0 攻图腾 + 求真之锤。
+    正确：武3 + (2+2) + (0+2) = 9；漏算图腾则为 7。
+    """
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.active_player_id = 1
+    gs.in_game = True
+    _hero(gs, 1, 1, atk479=0)
+    _hero(gs, 2, 2, hp=30, dmg=21)  # 9 血
+    _minion(gs, 10, 1, 2, 2, card_id="TIME_015")
+    _minion(gs, 11, 1, 0, 4, card_id="JAM_010")  # 点唱机图腾
+    _weapon(gs, 40, 1)
+
+    checker = LethalChecker(gs)
+    face = checker.overlay_board_face_damage()
+    assert face >= 9, (face, getattr(checker, "_overlay_spell_note", ""))
+    assert checker.overlay_red_prompt_ok(), face
+    board = gs.get_overlay_board(1)
+    assert board.face_attack_damage_no_taunt() >= 9
+    print("OK zero-atk totem Truth Seeker face", face)
+
+
 def _hand_weapon(gs, eid, pid, card_id="JAIL_329", atk=3, dur=3, cost=7):
     w = gs.get_entity(eid)
     w.cardtype = "WEAPON"
@@ -343,6 +369,7 @@ if __name__ == "__main__":
     test_face_hits_include_buff_after_weapon_swing()
     test_truth_seeker_lethal_vs_11_hp()
     test_board_face_includes_buff()
+    test_zero_atk_paladin_gets_truth_seeker_buff_face()
     test_hand_truth_seeker_lethal_before_equip()
     test_frozen_hero_no_truth_seeker_buff_current_or_next_turn()
     print("ALL PASS")

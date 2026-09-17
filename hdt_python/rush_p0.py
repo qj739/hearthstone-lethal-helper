@@ -227,6 +227,22 @@ def _apply_imprisoned_vilefiend(t, f, *, mult, **_kw) -> SpellApplyResult:
     return SpellApplyResult()
 
 
+def _apply_timelord_nozdormu(t, f, *, mult, card=None, **_kw) -> SpellApplyResult:
+    """时光之主诺兹多姆：休眠 5 回合；突袭仅唤醒后生效，本回合不能攻击。"""
+    atk = hand_minion_attack(card) if card is not None else 8
+    hp = hand_minion_health(card) if card is not None else 8
+    if atk <= 0:
+        atk = 8
+    if hp <= 0:
+        hp = 8
+    _summon_friendly_fighter(
+        f, atk * mult, hp * mult, card_id="TIME_063", rush=False,
+    )
+    f[-1]["dormant"] = True
+    f[-1]["rush"] = True
+    return SpellApplyResult()
+
+
 def _apply_bargain_bin_buccaneer(
     t, f, *, mult, card=None, combo_active=False, gs=None, player_id=None, **_kw,
 ) -> SpellApplyResult:
@@ -264,6 +280,7 @@ _RUSH_OVERRIDES = {
     "CORE_WC_701": (3, "邪能响尾蛇", _apply_felrattler),
     "CORE_BT_156": (2, "被禁锢的邪犬", _apply_imprisoned_vilefiend),
     "BT_156": (2, "被禁锢的邪犬", _apply_imprisoned_vilefiend),
+    "TIME_063": (3, "时光之主诺兹多姆", _apply_timelord_nozdormu),
     "TOY_516": (3, "折价区海盗", _apply_bargain_bin_buccaneer),
 }
 
@@ -307,8 +324,9 @@ def _register_all_rush_minions() -> None:
             uses_random=cid in _RANDOM_RUSH_IDS,
         ))
     # 覆盖表中但未进突袭清单的牌（如注能后才有突袭的影犬 MAW_009t）
+    # 覆盖项始终重注册，避免被 arena_season_bulk 的 default_rush 占坑（如休眠突袭）
     for cid, (base_cost, zh, apply_fn) in _RUSH_OVERRIDES.items():
-        if cid in seen or cid in BOARD_BATTLECRY or cid in BOARD_RUSH:
+        if cid in BOARD_BATTLECRY:
             continue
         _register_rush(BoardSpellDef(
             (cid,), base_cost, zh, apply_fn,

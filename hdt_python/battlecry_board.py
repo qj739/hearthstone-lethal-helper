@@ -165,3 +165,5 @@ def hand_all_board_plays(
 
 # 注册全部 P0 战吼
 from . import battlecry_p0  # noqa: E402, F401
+# 艾泽拉斯头号通缉（CAP_）：此时 spell_board / battlecry 均已就绪
+from . import most_wanted_p0  # noqa: E402, F401

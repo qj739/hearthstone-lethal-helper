@@ -480,6 +480,17 @@ def _apply_remixed_rhapsody(taunts, fighters, *, mult, enemy_shield, card=None, 
     return res
 
 
+def _apply_searing_fissure(
+    taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw,
+) -> SpellApplyResult:
+    """灼热裂隙：对所有随从造成 1 点伤害；本回合英雄 +3 攻击。"""
+    res = _apply_all_minions_aoe_spell(
+        taunts, fighters, _sd(1, mult=mult, spell_power=spell_power),
+    )
+    _add_temp_hero_attack(fighters, 3 * max(int(mult), 1))
+    return res
+
+
 def _register_p0_aoe() -> None:
     specs: List[tuple] = [
         # (card_ids, cost, name, apply_fn, uses_random, cost_fn?)
@@ -491,7 +502,7 @@ def _register_p0_aoe() -> None:
         (("RLK_709",), 4, "冷酷严冬", _all_enemies_aoe(2), False, None),
         (("TTN_753",), 3, "鼓动火焰", _apply_bellowing_flames, False, None),
         (("GDB_445",), 6, "陨石风暴", _all_minions_aoe(5), False, None),
-        (("CATA_582",), 2, "灼热裂隙", _all_minions_aoe(1), False, None),
+        (("CATA_582",), 2, "灼热裂隙", _apply_searing_fissure, False, None),
         (("JAM_018", "JAM_018t", "JAM_018t2", "JAM_018t3", "JAM_018t4"), 5, "混搭狂想曲", _apply_remixed_rhapsody, False, None),
         (("CORE_CS1_112",), 3, "神圣新星", _enemy_minions_aoe(2), False, None),
         (("TOY_500",), 4, "苏打火山", _apply_baking_soda_volcano, True, None),

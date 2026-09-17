@@ -186,10 +186,28 @@ def _apply_tooth_of_nefarian(taunts, fighters, *, mult, enemy_shield, spell_powe
 
 
 def _apply_infested_breath(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw,) -> SpellApplyResult:
-    """感染吐息：2 伤（0/2 水蛭 v1 不计场攻）。"""
-    return _apply_optimal_single_target_damage(
+    """感染吐息：2 伤并召唤一条 0/2 饱胀水蛭（回合结束可偷血打脸）。"""
+    res = _apply_optimal_single_target_damage(
         taunts, fighters, _sd(2, mult=mult, spell_power=spell_power), enemy_shield=enemy_shield,
     )
+    for _ in range(max(int(mult), 1)):
+        _summon_friendly_fighter(fighters, 0, 2, card_id="EDR_810t")
+    return res
+
+
+def _apply_blood_treant_infection(taunts, fighters, *, mult, enemy_shield, **_kw,) -> SpellApplyResult:
+    """血腥感染：选择一个随从，召唤两条 0/2 饱胀水蛭（需场上有随从目标）。"""
+    del enemy_shield
+    has_friendly = any(
+        f.get("kind") == "minion" and int(f.get("health", 0) or 0) > 0
+        for f in fighters
+    )
+    has_enemy = any(int(t.get("health", 0) or 0) > 0 for t in taunts)
+    if not has_friendly and not has_enemy:
+        return SpellApplyResult()
+    for _ in range(2 * max(int(mult), 1)):
+        _summon_friendly_fighter(fighters, 0, 2, card_id="EDR_810t")
+    return SpellApplyResult()
 
 
 def _apply_dart_throw(taunts, fighters, *, mult, enemy_shield, rng=None, spell_power=0, **_kw,) -> SpellApplyResult:
@@ -832,6 +850,7 @@ def _register_p0_other() -> None:
         (("OG_047", "CORE_OG_047"), 3, "野性之心", _apply_feral_rage, False),
         (("ONY_032",), 2, "奈法利安的牙", _apply_tooth_of_nefarian, False),
         (("EDR_814",), 2, "感染吐息", _apply_infested_breath, False),
+        (("EDR_817",), 5, "血腥感染", _apply_blood_treant_infection, False),
         (("WW_006",), 2, "飞镖投掷", _apply_dart_throw, True),
         (("TLC_902",), 2, "虫害侵扰", _apply_infestation, False),
         (("RLK_060", "CORE_RLK_060"), 5, "亡者大军", _apply_army_of_the_dead, False),

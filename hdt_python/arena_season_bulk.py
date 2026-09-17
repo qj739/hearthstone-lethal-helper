@@ -810,11 +810,14 @@ def _repair_weapon_destroy_battlecries(cards: dict, zh: dict) -> None:
 def _register_rush_cards(ids: List[str], cards: dict, zh: dict) -> None:
     from .battlecry_board import BOARD_BATTLECRY
     from .rush_board import BOARD_RUSH, _register_rush
-    from .rush_p0 import _apply_default_rush_minion
+    from .rush_p0 import _RUSH_OVERRIDES, _apply_default_rush_minion
     sb = _sb()
     seen: set[str] = set()
     for cid in ids:
         if cid in seen or _board_registered(cid, BOARD_RUSH) or _board_registered(cid, BOARD_BATTLECRY):
+            continue
+        # 休眠突袭由 rush_p0 覆盖实现，禁止 default_rush 误计当回合攻击
+        if cid in _RUSH_OVERRIDES:
             continue
         seen.add(cid)
         card = cards.get(cid, {})
@@ -910,6 +913,8 @@ def _ensure_board_modules_loaded() -> None:
     from . import rush_board  # noqa: F401
     from . import weapon_board  # noqa: F401
     from . import combo_board  # noqa: F401
+    from . import most_wanted_p0  # noqa: F401
+    most_wanted_p0.register_most_wanted()
 
 
 def register_arena_season_gap() -> List[Tuple[str, str, str, str]]:

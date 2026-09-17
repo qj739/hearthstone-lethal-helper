@@ -115,8 +115,11 @@ def _equip(
     buff_friendly_stats_after: tuple[int, int] = (0, 0),
     buff_all_paladin_stats_after: tuple[int, int] = (0, 0),
     summon_on_attack: tuple[int, int] | None = None,
+    summon_on_attack_charge: bool = False,
+    summon_on_attack_card_id: str = "",
     deathrattle_buff_friendly_from_script: bool = False,
     script_data_num_1: int = 0,
+    cannoneers_fire: bool = False,
     gs: Optional["GameState"] = None,
     player_id: Optional[int] = None,
     next_turn_preview: bool = False,
@@ -181,9 +184,15 @@ def _equip(
     if summon_on_attack:
         sa, sh = summon_on_attack
         w["summon_on_attack"] = (sa * mult, sh * mult)
+        if summon_on_attack_charge:
+            w["summon_on_attack_charge"] = True
+        if summon_on_attack_card_id:
+            w["summon_on_attack_card_id"] = summon_on_attack_card_id
     if deathrattle_buff_friendly_from_script:
         w["deathrattle_buff_friendly_from_script"] = True
         w["script_data_num_1"] = max(1, int(script_data_num_1 or 0) or 1) * mult
+    if cannoneers_fire:
+        w["cannoneers_fire"] = True
 
 
 # 已装备武器的攻击后效果（与 _equip 中 hand 打出一致；供 _build_fighters 挂载）
@@ -195,8 +204,15 @@ WEAPON_AFTER_ATTACK_META: dict[str, dict] = {
     "DMF_705": {"buff_friendly_stats_after": (1, 1)},
     "JAIL_329": {"buff_all_paladin_stats_after": (2, 2)},
     "TOY_358": {"summon_on_attack": (1, 1)},
+    # 尸骨火炮：英雄攻击后召唤冲锋 1/1 脆弱的食尸鬼
+    "JAIL_450": {
+        "summon_on_attack": (1, 1),
+        "summon_on_attack_charge": True,
+        "summon_on_attack_card_id": "HERO_11bpt",
+    },
     # 迪斯科战槌：耐久耗尽亡语，随机友方 +N/+N（N=TAG_SCRIPT_DATA_NUM_1）
     "ETC_317": {"deathrattle_buff_friendly_from_script": True},
+    "CAP_103": {"cannoneers_fire": True},
 }
 
 
@@ -237,6 +253,23 @@ def apply_after_attack_friendly_buffs(weapon: dict, fighters: List[dict]) -> Non
         _buff_all_friendly_paladin_minions(
             fighters, atk_bonus=int(ba), hp_bonus=int(bh),
         )
+
+
+def apply_summon_on_attack(weapon: dict, fighters: List[dict]) -> int:
+    """英雄武器攻击后的召唤（遥控器 / 尸骨火炮等）。返回新召唤数量。"""
+    summon = weapon.get("summon_on_attack")
+    if not summon:
+        return 0
+    sa, sh = summon
+    before = len(fighters)
+    _summon_friendly_fighter(
+        fighters,
+        int(sa),
+        int(sh),
+        charge=bool(weapon.get("summon_on_attack_charge")),
+        card_id=str(weapon.get("summon_on_attack_card_id") or ""),
+    )
+    return max(0, len(fighters) - before)
 
 
 def apply_weapon_break_deathrattle(
@@ -309,12 +342,35 @@ def after_hero_weapon_attack(
             )
             heal += res.opponent_lifesteal_heal
 
+    if weapon.get("cannoneers_fire"):
+        from .end_turn_board import (
+            cannoneer_shots_per_fire,
+            count_friendly_cannoneers,
+        )
+
+        n = count_friendly_cannoneers(fighters)
+        shots = cannoneer_shots_per_fire(fighters=fighters)
+        total_hits = n * shots
+        if total_hits > 0:
+            res = _apply_random_enemy_hits(
+                taunts, fighters, hits=total_hits, damage=1,
+                enemy_shield=enemy_shield, rng=roll,
+            )
+            heal += res.opponent_lifesteal_heal
+            face = int(res.direct_face_damage or 0)
+            if face > 0:
+                # 随机点脸伤害不在 taunts 上落账，追加一次挥击计入打脸
+                fighters.append({
+                    "kind": "hero",
+                    "atk": face,
+                    "health": 10**9,
+                    "attacks_left": 1,
+                    "can_face": True,
+                })
+
     apply_after_attack_friendly_buffs(weapon, fighters)
 
-    summon = weapon.get("summon_on_attack")
-    if summon:
-        sa, sh = summon
-        _summon_friendly_fighter(fighters, int(sa), int(sh))
+    apply_summon_on_attack(weapon, fighters)
 
     return heal
 
@@ -505,6 +561,19 @@ def _apply_remote(t, f, *, mult, **_kw):
     return SpellApplyResult()
 
 
+def _apply_corpse_cannon(t, f, *, mult, card=None, **_kw):
+    """尸骨火炮：英雄攻击后召唤冲锋 1/1 脆弱的食尸鬼。"""
+    wa, wd = _weapon_stats_from_card(card, 1, 3)
+    _equip(
+        f, wa, wd, "JAIL_450", mult=mult,
+        summon_on_attack=(1, 1),
+        summon_on_attack_charge=True,
+        summon_on_attack_card_id="HERO_11bpt",
+        **_kw,
+    )
+    return SpellApplyResult()
+
+
 def _apply_amplify(t, f, *, mult, **_kw):
     _equip(f, 3, 3, "REV_509", mult=mult, **_kw)
     return SpellApplyResult()
@@ -564,6 +633,7 @@ _WEAPON_OVERRIDES = {
     "TOY_810": ("画师的美德", _apply_virtue_brush),
     "RLK_828": ("奎尔萨拉斯的希望", _apply_hope),
     "TOY_358": ("遥控器", _apply_remote),
+    "JAIL_450": ("尸骨火炮", _apply_corpse_cannon),
     "REV_509": ("放大战刃", _apply_amplify),
     "END_012": ("无穷之手", _apply_hand_of_infinity),
 }
@@ -612,6 +682,7 @@ def _register_all_weapons() -> None:
         "CORE_CS2_091": 1,
         "JAM_011": 6,
         "JAIL_329": 7,
+        "JAIL_450": 2,
         "END_012": 5,
     }
     for cid, (zh, fn) in _WEAPON_OVERRIDES.items():

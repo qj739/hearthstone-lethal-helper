@@ -65,7 +65,7 @@ def _hand_spell(gs, eid, pid, card_id, cost):
     return s
 
 
-def _hand_minion(gs, eid, pid, atk, hp, cost, *, card_id="TEST_MINION", charge=False, rush=False, dark_gift_charge=False):
+def _hand_minion(gs, eid, pid, atk, hp, cost, *, card_id="TEST_MINION", charge=False, rush=False, dark_gift_charge=False, windfury=False):
     m = gs.get_entity(eid)
     m.cardtype = "MINION"
     m.controller = pid
@@ -81,6 +81,8 @@ def _hand_minion(gs, eid, pid, atk, hp, cost, *, card_id="TEST_MINION", charge=F
         m.tags["CHARGE"] = 1
     if rush:
         m.tags["RUSH"] = 1
+    if windfury:
+        m.tags["WINDFURY"] = 1
     if dark_gift_charge:
         m.tags["HAS_DARK_GIFT"] = 1
         enc = gs.get_entity(eid + 9000)
@@ -4360,6 +4362,27 @@ def test_dark_gift_charge_face_no_taunt():
     print("OK dark gift charge face no taunt")
 
 
+def test_dark_gift_charge_windfury_omen_double_face():
+    """黑暗之赐冲锋年兽：牌面风怒，打出后应计 2 次打脸。"""
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    _hero(gs, 1, 1, mana=10)
+    _hero(gs, 2, 2)
+    _hand_minion(
+        gs, 168, 1, 6, 12, 10,
+        card_id="EDR_421", dark_gift_charge=True, windfury=True, rush=True,
+    )
+
+    checker = LethalChecker(gs)
+    total = checker.overlay_board_face_damage()
+    assert total == 12, (total, checker.overlay_board_breakdown(), checker.overlay_spell_note())
+    note = checker.overlay_spell_note()
+    assert "手牌冲锋:" in note
+    assert "×2" in note
+    print("OK omen dark gift charge windfury twelve face")
+
+
 def test_living_nightmare_not_charge_mountain_bear():
     """活体梦魇 EDR_100t5e 不是冲锋；山岭野熊带该附魔不得计入手牌冲锋。"""
     from hdt_python.board_damage import collect_hand_charge_minions, hand_minion_has_charge
@@ -6734,6 +6757,7 @@ if __name__ == "__main__":
     test_hand_effect_active_outcast_flash_flood()
     test_vendetta_cost_when_powered_up()
     test_dark_gift_charge_face_no_taunt()
+    test_dark_gift_charge_windfury_omen_double_face()
     test_living_nightmare_not_charge_mountain_bear()
     test_p0_double_agent_charge_copy_face()
     test_p0_double_agent_charge_no_other_class_single_face()

@@ -12,6 +12,7 @@ from .spell_board import (
     _apply_buff_to_spell_target,
     _apply_optimal_single_target_damage,
     _friendly_minion_count,
+    _grant_rush_on_fighter,
     _pick_best_spell_target_fighter,
     _register,
     _summon_friendly_fighter,
@@ -445,6 +446,70 @@ def _apply_sunscreen(
     return SpellApplyResult()
 
 
+def _ensure_board_minions_in_fighters(
+    fighters: List[dict],
+    gs=None,
+    player_id=None,
+) -> None:
+    """把场面疲劳随从补进 fighters，供全体 buff/突袭法术作用。"""
+    if gs is None or player_id is None:
+        return
+    from .board_damage import _std_attack
+
+    present = {
+        f.get("entity_id") for f in fighters if f.get("entity_id") is not None
+    }
+    for ent in gs.get_board(player_id):
+        if not getattr(ent, "is_minion", False):
+            continue
+        if int(getattr(ent, "current_health", 0) or 0) <= 0:
+            continue
+        eid = ent.entity_id
+        if eid is None or eid in present:
+            continue
+        fighters.append({
+            "kind": "minion",
+            "entity_id": eid,
+            "card_id": ent.card_id or "",
+            "atk": int(_std_attack(ent) or 0),
+            "health": int(ent.current_health or 0),
+            "shield": int(ent.tags.get("DIVINE_SHIELD", 0) or 0) == 1,
+            "poisonous": int(ent.tags.get("POISONOUS", 0) or 0) == 1
+            or int(ent.tags.get("NON_KEYWORD_POISONOUS", 0) or 0) == 1,
+            "attacks_left": 0,
+            "can_face": False,
+            "rush": int(ent.tags.get("RUSH", 0) or 0) == 1,
+            "dormant": int(ent.tags.get("DORMANT", 0) or 0) == 1,
+        })
+        present.add(eid)
+
+
+def _apply_requiem(
+    taunts,
+    fighters,
+    *,
+    mult,
+    enemy_shield,
+    gs=None,
+    player_id=None,
+    **_kw,
+) -> SpellApplyResult:
+    """安魂仪式 DINO_417：友方全体 +1 攻并获得突袭（回合末死亡同回合斩杀忽略）。"""
+    _ = taunts, enemy_shield
+    _ensure_board_minions_in_fighters(fighters, gs=gs, player_id=player_id)
+    bonus = 1 * max(int(mult), 1)
+    for i, f in enumerate(fighters):
+        if f.get("kind") != "minion" or int(f.get("health", 0) or 0) <= 0:
+            continue
+        if f.get("dormant"):
+            continue
+        updated = dict(f)
+        updated["atk"] = int(updated.get("atk", 0) or 0) + bonus
+        _grant_rush_on_fighter(updated)
+        fighters[i] = updated
+    return SpellApplyResult()
+
+
 def _apply_silvermoon_portal(
     taunts,
     fighters,
@@ -541,6 +606,7 @@ def _register_p0_buff() -> None:
         (("CORE_UNG_952", "UNG_952"), 5, "剑龙骑术", _apply_spikeridged_steed, False),
         (("JAIL_447t",), 4, "侦探服", _apply_detectives_clothes, False),
         (("VAC_917t",), 1, "防晒霜", _apply_sunscreen, False),
+        (("DINO_417",), 1, "安魂仪式", _apply_requiem, False),
         (("RLK_048", "RLK_Prologue_RLK_048"), 3, "反魔法护罩", _apply_anti_magic_shell, False),
         (("ICC_314t7",), 4, "反魔法护罩", _apply_anti_magic_shell, False),
         (("TOY_716",), 4, "光速抢购", _apply_flash_sale, False),

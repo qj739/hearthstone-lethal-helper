@@ -47,6 +47,78 @@ class EndTurnDef:
     name: str = ""
 
 
+# 艾泽拉斯头号通缉：火炮手 / 克罗雷光环
+CANNONEER_CARD_IDS = frozenset({"CAP_107t"})
+CROWLEY_CARD_IDS = frozenset({"CAP_106"})
+
+
+def _card_id_in(card_id: str, ids: frozenset) -> bool:
+    if not card_id:
+        return False
+    if card_id in ids:
+        return True
+    if card_id.startswith("CORE_") and card_id[5:] in ids:
+        return True
+    return False
+
+
+def board_has_crowley(entities: List) -> bool:
+    """场上是否有存活、未沉默的克罗雷（火炮手额外开火）。"""
+    for entity in entities:
+        if not _entity_alive_on_board(entity):
+            continue
+        if is_silenced(entity):
+            continue
+        if _card_id_in(getattr(entity, "card_id", "") or "", CROWLEY_CARD_IDS):
+            return True
+    return False
+
+
+def fighters_have_crowley(fighters: Optional[List[dict]]) -> bool:
+    if not fighters:
+        return False
+    for f in fighters:
+        kind = f.get("kind")
+        if kind not in (None, "", "minion"):
+            continue
+        if int(f.get("health", 0) or 0) <= 0:
+            continue
+        if f.get("silenced"):
+            continue
+        if _card_id_in(str(f.get("card_id") or ""), CROWLEY_CARD_IDS):
+            return True
+    return False
+
+
+def count_friendly_cannoneers(fighters: Optional[List[dict]]) -> int:
+    if not fighters:
+        return 0
+    n = 0
+    for f in fighters:
+        kind = f.get("kind")
+        if kind not in (None, "", "minion"):
+            continue
+        if int(f.get("health", 0) or 0) <= 0:
+            continue
+        if f.get("silenced"):
+            continue
+        if _card_id_in(str(f.get("card_id") or ""), CANNONEER_CARD_IDS):
+            n += 1
+    return n
+
+
+def cannoneer_shots_per_fire(
+    *,
+    fighters: Optional[List[dict]] = None,
+    board_entities: Optional[List] = None,
+) -> int:
+    if fighters_have_crowley(fighters) or (
+        board_entities is not None and board_has_crowley(board_entities)
+    ):
+        return 2
+    return 1
+
+
 END_TURN_BY_CARD: Dict[str, EndTurnDef] = {
     "TOY_647": EndTurnDef(  # 8费 12/12
         EtKind.ALL_ENEMIES_DAMAGE, amount=3,
@@ -106,6 +178,10 @@ END_TURN_BY_CARD: Dict[str, EndTurnDef] = {
     ),
     "CORE_YOP_034": EndTurnDef(
         EtKind.RANDOM_ENEMY_MINION, amount=10, uses_random=True, name="窜逃的黑翼龙",
+    ),
+    # 饱胀水蛭：回合结束从生命值最低的敌人处偷取 1 点生命值（等价 1 点打脸）
+    "EDR_810t": EndTurnDef(
+        EtKind.ATTACK_LOWEST_ENEMY, amount=1, name="饱胀水蛭",
     ),
 }
 
@@ -193,14 +269,15 @@ def end_turn_face_from_fighters(
             continue
         if f.get("silenced"):
             continue
-        cid = f.get("card_id", "") or ""
-        if not _resolve_end_turn_def(cid):
+        kind = f.get("kind")
+        if kind not in (None, "", "minion"):
             continue
         eid = f.get("entity_id")
         if eid is not None:
             if eid in seen_eids:
                 continue
             seen_eids.add(eid)
+        # 含克罗雷等非回合结束源，供火炮手额外开火光环扫描
         entities.append(SimFighterEndTurnEntity(f))
     if not entities:
         return 0
@@ -714,6 +791,7 @@ def end_turn_face_damage(
         hero_health = _opponent_hero_health(game_state, player_id)
     total = 0
     notes: List[str] = []
+    crowley_extra = board_has_crowley(board_entities)
     for entity in board_entities:
         if not _entity_alive_on_board(entity):
             continue
@@ -726,7 +804,8 @@ def end_turn_face_damage(
             and not isinstance(entity, SimFighterEndTurnEntity)
         ):
             continue
-        defn = _resolve_end_turn_def(getattr(entity, "card_id", "") or "")
+        cid = getattr(entity, "card_id", "") or ""
+        defn = _resolve_end_turn_def(cid)
         if defn is None:
             continue
         if defn.requires_dormant and not is_dormant(entity):
@@ -738,10 +817,15 @@ def end_turn_face_damage(
         ):
             continue
 
-        face = _apply_end_turn_def(
-            defn, entity, enemy_board, defender_shield, rng=rng,
-            hero_health=hero_health,
-        )
+        shots = 1
+        if _card_id_in(cid, CANNONEER_CARD_IDS) and crowley_extra:
+            shots = 2
+        face = 0
+        for _ in range(shots):
+            face += _apply_end_turn_def(
+                defn, entity, enemy_board, defender_shield, rng=rng,
+                hero_health=hero_health,
+            )
         total += face
         if face > 0:
             notes.append(f"回合结束:{defn.name or entity.card_id}+{face}")

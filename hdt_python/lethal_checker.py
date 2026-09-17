@@ -1176,8 +1176,11 @@ class LethalChecker:
 
         total = 0
         for entity, _cost, atk in playable_hand_charges_for_overlay(self):
+            from .board_damage import attacks_per_turn, is_silenced
+
             copies = 2 if double_agent_summons_copy(self.game_state, local, entity) else 1
-            total += max(0, int(atk)) * copies
+            swings = max(1, attacks_per_turn(entity, is_silenced(entity)))
+            total += max(0, int(atk)) * swings * copies
         # 不超过场面随从分项（冲锋清嘲耗尽时不上溢）
         return min(total, max(0, int(getattr(self, "_overlay_board_face", 0) or 0)))
 
@@ -1278,7 +1281,10 @@ class LethalChecker:
 
     @staticmethod
     def _hand_charge_fighter(entity, atk: int, *, entity_id: Optional[int] = None) -> dict:
+        from .board_damage import attacks_per_turn, is_silenced
+
         hp = entity.current_health if entity.current_health > 0 else entity.health
+        swings = max(1, attacks_per_turn(entity, is_silenced(entity)))
         return {
             "kind": "minion",
             "entity_id": entity.entity_id if entity_id is None else entity_id,
@@ -1287,9 +1293,10 @@ class LethalChecker:
             "health": max(hp, 1),
             "shield": entity.tags.get("DIVINE_SHIELD", 0) == 1,
             "poisonous": entity.tags.get("POISONOUS", 0) == 1,
-            "attacks_left": 1,
+            "attacks_left": swings,
             "can_face": True,
             "charge": True,
+            "windfury": swings >= 2,
             "from_hand": True,
         }
 
@@ -1420,7 +1427,7 @@ class LethalChecker:
             buff_battlefiends_after_hero_attack,
             simulate_minion_face_hits,
         )
-        from .weapon_p0 import apply_after_attack_friendly_buffs
+        from .weapon_p0 import apply_after_attack_friendly_buffs, apply_summon_on_attack
 
         empty: Tuple[List[int], List[int], List[int], List[int], List[int]] = (
             [], [], [], [], [],
@@ -1468,6 +1475,11 @@ class LethalChecker:
                 elif f.get("kind") == "weapon":
                     weapon_hits.append(f["atk"])
                     apply_after_attack_friendly_buffs(f, minion_fs)
+                    # 尸骨火炮等：攻击后召唤冲锋随从，须并入后续打脸
+                    n_before = len(minion_fs)
+                    apply_summon_on_attack(f, minion_fs)
+                    for _new in range(n_before, len(minion_fs)):
+                        minion_meta.append("board")
                     # 邪犬 buff 在 minion 拷贝上；「英雄已攻击」标记须写回 fighters，供刃缚等战吼
                     buff_battlefiends_after_hero_attack(minion_fs, mark_on=fighters)
                     # 仅用局部耐久推演破斧亡语，勿写回 fighters：
@@ -1480,7 +1492,7 @@ class LethalChecker:
                     continue
                 else:
                     hero_buff_hits.append(f["atk"])
-                # 英雄/技能挥击：战斗邪犬 +1（再算随从打脸）
+                # 英雄/技能挥击：战斗邪犬 +1（再算随从打脸）；武器分支已 continue
                 buff_battlefiends_after_hero_attack(minion_fs, mark_on=fighters)
 
         board_fs = [m for m, meta in zip(minion_fs, minion_meta) if meta == "board"]
@@ -4530,15 +4542,19 @@ class LethalChecker:
                 continue
             actual_cost = card.cost if card.cost > 0 else base_cost
             if actual_cost <= available_mana and charge_damage > 0:
+                from .board_damage import attacks_per_turn, is_silenced
+
                 copies = 1
                 if double_agent_summons_copy(self.game_state, attacker_id, card):
                     copies = 2
+                swings = max(1, attacks_per_turn(card, is_silenced(card)))
+                hit = charge_damage * swings
                 desc = f"冲锋 {card.card_id}"
                 for _ in range(copies):
                     damage_sources.append(
-                        DamageSource("charge", charge_damage, desc, actual_cost),
+                        DamageSource("charge", hit, desc, actual_cost),
                     )
-                    total_damage += charge_damage
+                    total_damage += hit
                 available_mana -= actual_cost
 
         fatigue = self._opponent_upcoming_fatigue_damage()
@@ -4579,7 +4595,20 @@ class LethalChecker:
         by_id: dict = {}
 
         for card in board_view.cards:
-            if not card.entity.is_minion or not card.can_attack_minion:
+            if not card.entity.is_minion:
+                continue
+            ent = card.entity
+            # 0 攻但本回合具备攻击资格：求真之锤等挥击加攻后可出刀
+            from .board_damage import (
+                _minion_ready_ignoring_attack,
+                _can_attack_hero_ignoring_attack,
+            )
+            include = card.can_attack_minion
+            if not include and int(card.std_attack or 0) <= 0:
+                include = _minion_ready_ignoring_attack(
+                    ent, board_view.active_turn, self.game_state,
+                )
+            if not include:
                 continue
             eid = card.entity.entity_id
             if eid not in by_id:
@@ -4600,6 +4629,11 @@ class LethalChecker:
                     and _minion_summoned_this_turn(card.entity)
                 )
                 stolen_turn = is_potion_madness_stolen(self.game_state, card.entity)
+                can_face = card.can_attack_hero
+                if not can_face and int(card.std_attack or 0) <= 0:
+                    can_face = _can_attack_hero_ignoring_attack(
+                        ent, board_view.active_turn, self.game_state,
+                    )
                 fighter = {
                     "kind": "minion",
                     "entity_id": eid,
@@ -4613,8 +4647,9 @@ class LethalChecker:
                         card.entity, self.game_state,
                     ),
                     "attacks_left": 0,
-                    "can_face": card.can_attack_hero,
+                    "can_face": can_face,
                     "rush": card.entity.tags.get("RUSH", 0) == 1,
+                    "stealth": card.entity.tags.get("STEALTH", 0) == 1,
                     "dormant": is_dormant(card.entity, self.game_state),
                     "silenced": is_silenced(card.entity),
                     "from_hero_power": from_hp,
@@ -4649,7 +4684,10 @@ class LethalChecker:
         leokk_n = count_board_leokk(self.game_state, player_id)
         stamp_board_leokk_aura(list(by_id.values()), leokk_n)
 
-        fighters = [f for f in by_id.values() if f["attacks_left"] > 0 and f["atk"] > 0]
+        fighters = [
+            f for f in by_id.values()
+            if f["attacks_left"] > 0 and (f["atk"] > 0 or f.get("can_face"))
+        ]
         # 场上有雷欧克但无人可攻击时，保留光环计数供手牌冲锋/召唤挂载
         if leokk_n > 0 and not any(int(f.get("_board_leokk_count", 0) or 0) for f in fighters):
             fighters.append({

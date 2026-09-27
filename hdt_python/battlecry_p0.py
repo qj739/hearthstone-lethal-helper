@@ -696,8 +696,18 @@ def _apply_fire_plume_phoenix(t, f, *, mult, enemy_shield, **_kw):
     )
 
 
-def _apply_ebonscale_scout(t, f, *, mult, enemy_shield, card=None, **_kw):
-    atk = 8 if hand_effect_active(card) else _hand_card_attack(card, 4)
+def _apply_ebonscale_scout(
+    t, f, *, mult, enemy_shield, card=None, dragon_played=False, **_kw,
+):
+    """战吼伤害等于攻击力。手牌打出龙后变为 CATA_552t 8/8，战吼打 8。"""
+    cid = (getattr(card, "card_id", None) or "") if card else ""
+    default = 8 if cid == "CATA_552t" else 4
+    atk = hand_minion_attack(card) if card is not None else default
+    if atk <= 0:
+        atk = default
+    # 本序列已先打出龙、日志尚未把 4/4 换成 8/8 时，战吼仍按 8
+    if dragon_played and cid != "CATA_552t":
+        atk = max(atk, 8)
     return _apply_optimal_single_target_damage(
         t, f, atk * mult, enemy_shield=enemy_shield,
     )
@@ -1022,7 +1032,9 @@ def _apply_defias_smuggler(
         for m in gs.get_board(player_id):
             if m.current_health > 0 and m.entity_id is not None:
                 before_ids.add(m.entity_id)
-    _summon_friendly_fighter(f, 3 * mult, 3 * mult, card_id="JAIL_998")
+    atk = hand_minion_attack(card) if card is not None else 2
+    hp = hand_minion_health(card) if card is not None else 3
+    _summon_friendly_fighter(f, atk * mult, hp * mult, card_id="JAIL_998")
     if not before_ids:
         return SpellApplyResult()
     picked = _pick_best_spell_target_fighter(f, gs=gs, player_id=player_id)
@@ -1302,6 +1314,155 @@ def _apply_manifested_timeways(
     )
 
 
+def _apply_ugly_remains(taunts, fighters, *, mult, card=None, **_kw) -> SpellApplyResult:
+    """丑恶的残躯：上场；战吼召唤两条 0/2 饱胀水蛭（光环使水蛭偷血 +1）。"""
+    del taunts
+    atk = hand_minion_attack(card) if card is not None else 3
+    hp = hand_minion_health(card) if card is not None else 5
+    _summon_friendly_fighter(
+        fighters, atk * mult, hp * mult, card_id="EDR_810", aura=True,
+    )
+    for _ in range(2 * max(int(mult), 1)):
+        _summon_friendly_fighter(fighters, 0, 2, card_id="EDR_810t")
+    return SpellApplyResult()
+
+
+# 紫罗兰惩戒者可偷取的「额外效果」（场面状态键）
+_VIOLET_STEAL_KEYS = (
+    "taunt",
+    "rush",
+    "charge",
+    "reborn",
+    "shield",
+    "lifesteal",
+    "poisonous",
+    "windfury",
+)
+
+
+def _violet_stealable_count(unit: dict) -> int:
+    return sum(1 for k in _VIOLET_STEAL_KEYS if unit.get(k))
+
+
+def _apply_violet_spellsword(
+    taunts,
+    fighters,
+    *,
+    mult,
+    enemy_shield,
+    card=None,
+    **_kw,
+) -> SpellApplyResult:
+    """紫罗兰惩戒者 JAIL_101：偷取敌方随从额外效果；每偷一个 +1/+1。
+
+    偷嘲讽可打开打脸；偷突袭/冲锋使本随从当回合可攻击；偷复生防止对方复活挡脸。
+    """
+    living = [
+        t for t in _living_enemy_board_minions(taunts)
+        if not t.get("spell_immune") and _violet_stealable_count(t) > 0
+    ]
+    if not living:
+        # 无合法目标时仍上场本体（实际对局打不出；搜索侧会被剪掉）
+        atk = hand_minion_attack(card) if card is not None else 4
+        hp = hand_minion_health(card) if card is not None else 3
+        if atk <= 0:
+            atk = 4
+        if hp <= 0:
+            hp = 3
+        _summon_friendly_fighter(
+            fighters, atk * mult, hp * mult, card_id="JAIL_101",
+        )
+        return SpellApplyResult()
+
+    base_atk = hand_minion_attack(card) if card is not None else 4
+    base_hp = hand_minion_health(card) if card is not None else 3
+    if base_atk <= 0:
+        base_atk = 4
+    if base_hp <= 0:
+        base_hp = 3
+
+    best_score = -1
+    best_target = None
+    best_stolen: dict = {}
+
+    for target in living:
+        stolen = {k: bool(target.get(k)) for k in _VIOLET_STEAL_KEYS if target.get(k)}
+        n = len(stolen)
+        ts = deepcopy(taunts)
+        fs = deepcopy(fighters)
+        tgt = next(
+            (x for x in ts if x.get("entity_id") == target.get("entity_id")),
+            None,
+        )
+        if tgt is None:
+            continue
+        for k in stolen:
+            if k == "reborn":
+                tgt["reborn"] = False
+                tgt["reborn_used"] = True
+            else:
+                tgt[k] = False
+        got_charge = bool(stolen.get("charge"))
+        got_rush = bool(stolen.get("rush")) and not got_charge
+        _summon_friendly_fighter(
+            fs,
+            (base_atk + n) * mult,
+            (base_hp + n) * mult,
+            rush=got_rush,
+            charge=got_charge,
+            taunt=bool(stolen.get("taunt")),
+            divine_shield=bool(stolen.get("shield")),
+            lifesteal=bool(stolen.get("lifesteal")),
+            poisonous=bool(stolen.get("poisonous")),
+            windfury=bool(stolen.get("windfury")),
+            card_id="JAIL_101",
+        )
+        if stolen.get("reborn"):
+            fs[-1]["reborn"] = True
+        score = project_board_face_after_spell(ts, fs, enemy_shield)
+        # 同等场面优先：拆嘲讽、偷得多（身材更大）、偷突袭/冲锋
+        score = (
+            score * 1000
+            + (100 if stolen.get("taunt") else 0)
+            + (50 if got_charge or got_rush else 0)
+            + (20 if stolen.get("reborn") else 0)
+            + n
+        )
+        if score > best_score:
+            best_score = score
+            best_target = target
+            best_stolen = stolen
+
+    if best_target is None:
+        return SpellApplyResult()
+
+    n = len(best_stolen)
+    for k in best_stolen:
+        if k == "reborn":
+            best_target["reborn"] = False
+            best_target["reborn_used"] = True
+        else:
+            best_target[k] = False
+    got_charge = bool(best_stolen.get("charge"))
+    got_rush = bool(best_stolen.get("rush")) and not got_charge
+    _summon_friendly_fighter(
+        fighters,
+        (base_atk + n) * mult,
+        (base_hp + n) * mult,
+        rush=got_rush,
+        charge=got_charge,
+        taunt=bool(best_stolen.get("taunt")),
+        divine_shield=bool(best_stolen.get("shield")),
+        lifesteal=bool(best_stolen.get("lifesteal")),
+        poisonous=bool(best_stolen.get("poisonous")),
+        windfury=bool(best_stolen.get("windfury")),
+        card_id="JAIL_101",
+    )
+    if best_stolen.get("reborn"):
+        fighters[-1]["reborn"] = True
+    return SpellApplyResult()
+
+
 def _register_p0_battlecry() -> None:
     specs = [
         # 1. 直伤
@@ -1342,7 +1503,7 @@ def _register_p0_battlecry() -> None:
         (("GDB_132",), 3, "躁动的愤怒卫士", _apply_wrathguard, False),
         (("ONY_024",), 4, "奥妮克希亚幼龙", _apply_onyxian_drake, False),
         (("DMF_101",), 5, "焰火元素", _apply_firework_elemental, False),
-        (("CATA_552",), 6, "乌鳞斥候", _apply_ebonscale_scout, False),
+        (("CATA_552", "CATA_552t"), 6, "乌鳞斥候", _apply_ebonscale_scout, False),
         # 3. AOE
         (("GDB_226",), 5, "凶恶的入侵者", _apply_hostile_invader, False),
         (("AV_126",), 3, "碉堡中士", _apply_bunker_sergeant, False),
@@ -1388,6 +1549,8 @@ def _register_p0_battlecry() -> None:
         (("NEW1_033", "VAN_NEW1_033"), 3, "雷欧克", _apply_leokk, False),
         (("TOY_028",), 2, "团队之灵", _apply_team_spirit, False),
         (("TIME_019",), 4, "时间流具象", _apply_manifested_timeways, False),
+        (("EDR_810",), 3, "丑恶的残躯", _apply_ugly_remains, False),
+        (("JAIL_101",), 3, "紫罗兰惩戒者", _apply_violet_spellsword, False),
     ]
     for card_ids, cost, name, fn, uses_random in specs:
         _register_bc(

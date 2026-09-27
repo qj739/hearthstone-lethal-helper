@@ -715,11 +715,17 @@ def _apply_shard_of_naaru(taunts, fighters, *, mult, enemy_shield, **_kw,) -> Sp
     return SpellApplyResult()
 
 
-def _apply_schism(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw,) -> SpellApplyResult:
-    """教派分歧：友方随从 +2/+3，召唤其复制（v1 复制当回合失调）。"""
+def _apply_schism(
+    taunts, fighters, *, mult, enemy_shield, spell_power=0,
+    buff: bool = True, summon_copy: bool = True, **_kw,
+) -> SpellApplyResult:
+    """教派分歧：友方 +2/+3，并/或召唤其复制（复制当回合失调，冲锋/突袭除外）。"""
     living = _living_friendly_minions(fighters)
     if not living:
         return SpellApplyResult()
+
+    bonus_atk = _sd(2, mult=mult, spell_power=spell_power) if buff else 0
+    bonus_hp = _sd(3, mult=mult, spell_power=spell_power) if buff else 0
 
     best_score = -1
     best_eid = None
@@ -729,9 +735,10 @@ def _apply_schism(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw,
         target = next((x for x in fs if x.get("entity_id") == f.get("entity_id")), None)
         if target is None:
             continue
-        target["atk"] = target.get("atk", 0) + _sd(2, mult=mult, spell_power=spell_power)
-        target["health"] = target.get("health", 0) + _sd(3, mult=mult, spell_power=spell_power)
-        _summon_minion_copy(fs, target)
+        target["atk"] = target.get("atk", 0) + bonus_atk
+        target["health"] = target.get("health", 0) + bonus_hp
+        if summon_copy:
+            _summon_minion_copy(fs, target)
         score = _score_board_face(ts, fs, enemy_shield)
         if score > best_score:
             best_score = score
@@ -741,10 +748,35 @@ def _apply_schism(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw,
         return SpellApplyResult()
     for target in fighters:
         if target.get("entity_id") == best_eid:
-            target["atk"] = target.get("atk", 0) + _sd(2, mult=mult, spell_power=spell_power)
-            target["health"] = target.get("health", 0) + _sd(3, mult=mult, spell_power=spell_power)
-            _summon_minion_copy(fighters, target)
+            target["atk"] = target.get("atk", 0) + bonus_atk
+            target["health"] = target.get("health", 0) + bonus_hp
+            if summon_copy:
+                _summon_minion_copy(fighters, target)
             break
+    return SpellApplyResult()
+
+
+def _apply_schism_buff_only(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw):
+    """已裂变半张：只给友方 +2/+3。"""
+    return _apply_schism(
+        taunts, fighters, mult=mult, enemy_shield=enemy_shield,
+        spell_power=spell_power, buff=True, summon_copy=False,
+    )
+
+
+def _apply_schism_copy_only(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw):
+    """已裂变半张：只召唤友方随从的复制。"""
+    return _apply_schism(
+        taunts, fighters, mult=mult, enemy_shield=enemy_shield,
+        spell_power=spell_power, buff=False, summon_copy=True,
+    )
+
+
+def _apply_deadly_bribe(taunts, fighters, *, enemy_shield, card=None, **_kw) -> SpellApplyResult:
+    """致命贿赂：消灭一个随从。对手获得幸运币（本回合斩杀不计）。"""
+    _apply_optimal_destroy_any_minion(
+        taunts, fighters, enemy_shield=enemy_shield, card=card,
+    )
     return SpellApplyResult()
 
 
@@ -777,10 +809,13 @@ def _register_p0_remove() -> None:
         (("CATA_203",), 2, "迦罗娜的奋战", _apply_garona_last_stand, False, None),
         (("NX2_020",), 4, "野蛮残食", _apply_cannibalize, False, None),
         (("CATA_306",), 4, "教派分歧", _apply_schism, False, None),
+        (("CATA_306t1",), 4, "教派分歧", _apply_schism_buff_only, False, None),
+        (("CATA_306t2",), 4, "教派分歧", _apply_schism_copy_only, False, None),
         (("REV_239",), 3, "窒息暗影", _apply_suffocating_shadows, True, None),
         (("CATA_479",), 4, "飞龙机动", _apply_flight_maneuvers, False, None),
         (("SW_441",), 1, "纳鲁碎片", _apply_shard_of_naaru, False, None),
         (("SCH_235",), 1, "衰变飞弹", _apply_devolving_missiles, True, None),
+        (("CATA_EVENT_402",), 3, "致命贿赂", _apply_deadly_bribe, False, None),
         (("LOOT_417",), 5, "大灾变", _apply_cataclysm, False, None),
     ]
     for card_ids, cost, name, fn, uses_random, cost_fn in specs:

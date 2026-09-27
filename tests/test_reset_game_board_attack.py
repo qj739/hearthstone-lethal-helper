@@ -21,6 +21,9 @@ TARGET = 250001
 
 
 def test_rewind_board_attack_not_inflated():
+    if not LOG.is_file():
+        print("SKIP missing log", LOG)
+        return
     lines = LOG.read_text(encoding="utf-8", errors="ignore").splitlines()
     gs = GameState()
     p = PowerLogParser(str(LOG), gs)

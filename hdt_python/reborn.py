@@ -54,10 +54,11 @@ def entity_reborn_flags(
     """
     从场面实体提取复生模拟字段。
     返回 (仍有复生次数, 是否满血复生, max_health)。
+
+    以 REBORN=1 为准：日志里偷取复生时可能同时残留 HAS_BEEN_REBORN，
+    不能因后者把仍有效的复生判没。
     """
     max_hp = max(int(entity.health or 0), entity.current_health, 1)
-    if entity_reborn_already_used(entity):
-        return False, False, max_hp
     if not entity_has_reborn(entity):
         return False, False, max_hp
     return True, entity_reborn_full_health(gs, entity), max_hp

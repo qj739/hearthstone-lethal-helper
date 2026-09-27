@@ -166,9 +166,32 @@ def test_attackable_by_rush_tag_not_treated_as_rush():
     print("OK ATTACKABLE_BY_RUSH not rush")
 
 
+def test_opponent_placed_minion_attacks_next_turn_despite_just_played():
+    """对手把随从放到我方一侧：下回合 JUST_PLAYED 仍为 1，但已在场一回合，应能打脸。"""
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.active_player_id = 1
+    gs.in_game = True
+    _hero(gs, 1, 1)
+    m = _normal_minion(gs, 10, 1, 4, 3)
+    m.card_id = "JAIL_452"
+    m.tags["JUST_PLAYED"] = 1
+    m.tags["1196"] = 0
+    m.tags["EXHAUSTED"] = 0
+    m.tags["NUM_TURNS_IN_PLAY"] = 1
+    m.tags["NUM_ATTACKS_THIS_TURN"] = 0
+
+    view = m.board_card_view(True, gs)
+    assert view.can_attack_hero, "placed minion should attack after a turn"
+    assert view.attack == 4
+    print("OK opponent-placed minion face", view.attack)
+
+
 if __name__ == "__main__":
     test_rush_no_face_same_turn_after_1196_clears()
     test_cata_465t_whelp_no_face_after_1196_clears()
     test_rush_face_next_turn_preview()
     test_attackable_by_rush_tag_not_treated_as_rush()
+    test_opponent_placed_minion_attacks_next_turn_despite_just_played()
     print("all passed")

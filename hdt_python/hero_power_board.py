@@ -32,7 +32,8 @@ _DK_GHOUL_EXTRA_1 = frozenset({"TUTR_HERO_11bp"})
 DK_GHOUL_TOKEN_IDS = frozenset({"HERO_11bpt"})
 # 英雄卡 → 技能卡：日志里旧技能已离场、新技能实体尚未 ZONE=PLAY 时的推断
 _HERO_TO_POWER_CARD = {"CATA_190h": "CATA_190p"}
-_DEAD_HP_ZONES = frozenset({"GRAVEYARD", "REMOVEDFROMGAME"})
+# SETASIDE：灌注切换后旧技能（如匕首精通）会留在此区，不可再当作可用技能
+_DEAD_HP_ZONES = frozenset({"GRAVEYARD", "REMOVEDFROMGAME", "SETASIDE"})
 
 
 def is_dk_ghoul_board_token(card_id: str) -> bool:
@@ -116,10 +117,35 @@ def get_hero_power_def(card_id: str) -> Optional[BoardSpellDef]:
     return BOARD_HERO_POWER.get(key)
 
 
-def hero_power_cost(entity: "Entity") -> int:
-    if entity.cost > 0:
-        return entity.cost
-    return int(entity.tags.get("COST", 0) or 0)
+def hero_power_cost(
+    entity: "Entity",
+    gs: Optional["GameState"] = None,
+    player_id: Optional[int] = None,
+    *,
+    corpses_budget: Optional[int] = None,
+) -> int:
+    """英雄技能法力费用。CORPSE_SPENDER 时不占法力（残骸不够返回 999）。"""
+    raw = int(entity.cost) if entity.cost and entity.cost > 0 else int(entity.tags.get("COST", 0) or 0)
+    if int(entity.tags.get("CORPSE_SPENDER", 0) or 0) == 1:
+        need = raw if raw > 0 else int(entity.tags.get("COST", 0) or 0)
+        if need > 0:
+            if corpses_budget is not None:
+                if corpses_budget < need:
+                    return 999
+            elif gs is not None and player_id is not None:
+                from .spell_board import player_corpses
+                if player_corpses(gs, player_id) < need:
+                    return 999
+        return 0
+    return raw
+
+
+def hero_power_corpse_cost(entity: "Entity") -> int:
+    """残骸费用（非残骸技能为 0）。"""
+    if int(entity.tags.get("CORPSE_SPENDER", 0) or 0) != 1:
+        return 0
+    raw = int(entity.cost) if entity.cost and entity.cost > 0 else int(entity.tags.get("COST", 0) or 0)
+    return max(0, raw)
 
 
 def hero_power_is_ready(entity: "Entity", *, next_turn: bool = False) -> bool:
@@ -160,6 +186,47 @@ def get_active_hero_power(gs: "GameState", player_id: int) -> Optional["Entity"]
     return None
 
 
+def list_usable_hero_powers(
+    gs: "GameState",
+    player_id: int,
+    available_mana: int,
+    *,
+    next_turn: bool = False,
+    corpses_budget: Optional[int] = None,
+) -> List[Tuple["Entity", BoardSpellDef, int, int]]:
+    """所有可用英雄技能：(实体, 定义, 法力费, 残骸费)。残骸技能优先。"""
+    from .spell_board import player_corpses
+
+    corpses_left = (
+        corpses_budget
+        if corpses_budget is not None
+        else player_corpses(gs, player_id)
+    )
+    rows: List[Tuple["Entity", BoardSpellDef, int, int]] = []
+    in_play, pending = _player_hero_power_entities(gs, player_id)
+    # PLAY 区已有技能时只用 PLAY：灌注后旧匕首等会留在 SETASIDE，勿回退使用
+    pool = list(in_play) if in_play else list(pending)
+    for e in pool:
+        if not hero_power_is_ready(e, next_turn=next_turn):
+            continue
+        defn = get_hero_power_def(e.card_id or "")
+        if defn is None:
+            continue
+        corpse_need = hero_power_corpse_cost(e)
+        mana_need = hero_power_cost(
+            e, gs, player_id, corpses_budget=corpses_left,
+        )
+        if mana_need >= 999:
+            continue
+        if mana_need > available_mana:
+            continue
+        if corpse_need > corpses_left:
+            continue
+        rows.append((e, defn, mana_need, corpse_need))
+    rows.sort(key=lambda r: (0 if r[3] > 0 else 1, r[2], r[0].entity_id))
+    return rows
+
+
 def _inferred_hero_power_row(
     gs: "GameState", player_id: int, available_mana: int, *, next_turn: bool = False,
 ) -> Optional[Tuple[Optional["Entity"], BoardSpellDef, int]]:
@@ -188,7 +255,7 @@ def _inferred_hero_power_row(
         return None
     cost = defn.base_cost
     if entity is not None:
-        cost = hero_power_cost(entity)
+        cost = hero_power_cost(entity, gs, player_id)
     if cost > available_mana:
         return None
     return entity, defn, cost
@@ -214,14 +281,14 @@ def _hand_transform_hero_power_row(
         defn = get_hero_power_def(power_cid)
         if defn is None:
             continue
-        play_cost = hand_minion_cost(card)
+        play_cost = hand_minion_cost(card, gs, player_id)
         hp_cost = defn.base_cost
         for e in list(gs.entities.values()):
             if (e.card_id or "") != power_cid:
                 continue
             if not gs.is_entity_controlled_by(e, player_id):
                 continue
-            hp_cost = hero_power_cost(e)
+            hp_cost = hero_power_cost(e, gs, player_id)
             break
         total = play_cost + hp_cost
         if total > available_mana:
@@ -234,13 +301,12 @@ def _hand_transform_hero_power_row(
 def usable_hero_power(
     gs: "GameState", player_id: int, available_mana: int, *, next_turn: bool = False,
 ) -> Optional[Tuple[Optional["Entity"], BoardSpellDef, int]]:
-    hp = get_active_hero_power(gs, player_id)
-    if hp is not None and hero_power_is_ready(hp, next_turn=next_turn):
-        defn = get_hero_power_def(hp.card_id or "")
-        if defn is not None:
-            cost = hero_power_cost(hp)
-            if cost <= available_mana:
-                return hp, defn, cost
+    rows = list_usable_hero_powers(
+        gs, player_id, available_mana, next_turn=next_turn,
+    )
+    if rows:
+        e, defn, mana_need, _corpse = rows[0]
+        return e, defn, mana_need
     row = _inferred_hero_power_row(gs, player_id, available_mana, next_turn=next_turn)
     if row is not None:
         return row
@@ -255,6 +321,69 @@ def has_usable_hero_power(
     ) is not None
 
 
+def apply_all_usable_hero_powers(
+    gs: "GameState",
+    player_id: int,
+    fighters: List[dict],
+    mana_budget: Optional[int],
+    *,
+    enemy_shield: bool = False,
+    next_turn: bool = False,
+    taunts: Optional[List[dict]] = None,
+    corpses_budget: Optional[int] = None,
+) -> Tuple[bool, Optional[int], List[str], SpellApplyResult, int]:
+    """
+    依次使用所有当前可用英雄技能（残骸 buff 优先，再法力技能）。
+    返回 (是否用过, 剩余法力, 技能名列表, 合并结果, 剩余残骸预算)。
+    """
+    from .spell_board import player_corpses
+
+    mana_left = mana_budget
+    corpses_left = (
+        corpses_budget
+        if corpses_budget is not None
+        else player_corpses(gs, player_id)
+    )
+    names: List[str] = []
+    total = SpellApplyResult()
+    used = False
+    # 同一实体只点一次；用过的 eid 跳过
+    used_eids: set = set()
+    while True:
+        budget = 10**9 if mana_left is None else mana_left
+        rows = [
+            r for r in list_usable_hero_powers(
+                gs, player_id, budget, next_turn=next_turn,
+                corpses_budget=corpses_left,
+            )
+            if r[0].entity_id not in used_eids
+        ]
+        if not rows:
+            break
+        entity, defn, mana_need, corpse_need = rows[0]
+        hp_res = defn.apply(
+            list(taunts or []),
+            fighters,
+            mult=1,
+            enemy_shield=enemy_shield,
+            gs=gs,
+            player_id=player_id,
+            next_turn_preview=next_turn,
+        )
+        total.direct_face_damage += int(hp_res.direct_face_damage or 0)
+        total.battlecry_face_damage += int(hp_res.battlecry_face_damage or 0)
+        total.self_hero_heal += int(hp_res.self_hero_heal or 0)
+        if hp_res.broke_enemy_hero_shield:
+            total.broke_enemy_hero_shield = True
+        if mana_left is not None:
+            mana_left -= mana_need
+        corpses_left = max(0, corpses_left - corpse_need)
+        used_eids.add(entity.entity_id)
+        names.append(defn.name)
+        used = True
+    return used, mana_left, names, total, corpses_left
+
+
 def apply_hero_power_to_fighters(
     gs: "GameState",
     player_id: int,
@@ -266,22 +395,11 @@ def apply_hero_power_to_fighters(
     taunts: Optional[List[dict]] = None,
 ) -> Tuple[bool, Optional[int], SpellApplyResult]:
     """对 fighters 施加英雄技能效果；返回 (是否成功, 剩余法力, 技能结果)。"""
-    row = usable_hero_power(gs, player_id, mana_budget or 0, next_turn=next_turn)
-    if row is None:
-        return False, mana_budget, SpellApplyResult()
-    _entity, defn, cost = row
-    hp_res = defn.apply(
-        list(taunts or []),
-        fighters,
-        mult=1,
-        enemy_shield=enemy_shield,
-        gs=gs,
-        player_id=player_id,
-        next_turn_preview=next_turn,
+    used, mana_left, _names, hp_res, _corpses = apply_all_usable_hero_powers(
+        gs, player_id, fighters, mana_budget,
+        enemy_shield=enemy_shield, next_turn=next_turn, taunts=taunts,
     )
-    if mana_budget is None:
-        return True, None, hp_res
-    return True, mana_budget - cost, hp_res
+    return used, mana_left, hp_res
 
 
 from . import hero_power_p0  # noqa: E402, F401

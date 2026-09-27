@@ -50,6 +50,9 @@ class EndTurnDef:
 # 艾泽拉斯头号通缉：火炮手 / 克罗雷光环
 CANNONEER_CARD_IDS = frozenset({"CAP_107t"})
 CROWLEY_CARD_IDS = frozenset({"CAP_106"})
+# 丑恶的残躯：水蛭从其宿主处偷取的生命值 +1（可叠）
+UGLY_REMAINS_CARD_IDS = frozenset({"EDR_810"})
+BLOATED_LEECH_CARD_IDS = frozenset({"EDR_810t"})
 
 
 def _card_id_in(card_id: str, ids: frozenset) -> bool:
@@ -72,6 +75,19 @@ def board_has_crowley(entities: List) -> bool:
         if _card_id_in(getattr(entity, "card_id", "") or "", CROWLEY_CARD_IDS):
             return True
     return False
+
+
+def count_ugly_remains(entities: List) -> int:
+    """场上存活、未沉默的丑恶的残躯数量（每具使水蛭偷血 +1）。"""
+    n = 0
+    for entity in entities:
+        if not _entity_alive_on_board(entity):
+            continue
+        if is_silenced(entity):
+            continue
+        if _card_id_in(getattr(entity, "card_id", "") or "", UGLY_REMAINS_CARD_IDS):
+            n += 1
+    return n
 
 
 def fighters_have_crowley(fighters: Optional[List[dict]]) -> bool:
@@ -180,6 +196,7 @@ END_TURN_BY_CARD: Dict[str, EndTurnDef] = {
         EtKind.RANDOM_ENEMY_MINION, amount=10, uses_random=True, name="窜逃的黑翼龙",
     ),
     # 饱胀水蛭：回合结束从生命值最低的敌人处偷取 1 点生命值（等价 1 点打脸）
+    # 场上每有一具丑恶的残躯（EDR_810）再 +1
     "EDR_810t": EndTurnDef(
         EtKind.ATTACK_LOWEST_ENEMY, amount=1, name="饱胀水蛭",
     ),
@@ -293,6 +310,7 @@ def sim_end_turn_entities_from_fighters(fighters: Optional[List[dict]]) -> List:
     本回合 fighters 中的回合结束源：
     - sim_summon：手牌打出尚未落场的 token
     - 其余（如红牌休眠玛瑟里顿）：用 SimFighterEndTurnEntity 覆盖场面休眠状态
+    另含丑恶的残躯等非回合结束光环源，供水蛭偷血加成扫描。
     """
     if not fighters:
         return []
@@ -304,7 +322,7 @@ def sim_end_turn_entities_from_fighters(fighters: Optional[List[dict]]) -> List:
         if f.get("silenced"):
             continue
         cid = f.get("card_id", "") or ""
-        if not _resolve_end_turn_def(cid):
+        if not _resolve_end_turn_def(cid) and not _card_id_in(cid, UGLY_REMAINS_CARD_IDS):
             continue
         eid = f.get("entity_id")
         if eid is not None:
@@ -792,6 +810,7 @@ def end_turn_face_damage(
     total = 0
     notes: List[str] = []
     crowley_extra = board_has_crowley(board_entities)
+    leech_steal_bonus = count_ugly_remains(board_entities)
     for entity in board_entities:
         if not _entity_alive_on_board(entity):
             continue
@@ -817,13 +836,21 @@ def end_turn_face_damage(
         ):
             continue
 
+        apply_defn = defn
+        if leech_steal_bonus > 0 and _card_id_in(cid, BLOATED_LEECH_CARD_IDS):
+            apply_defn = EndTurnDef(
+                defn.kind,
+                amount=defn.amount + leech_steal_bonus,
+                name=defn.name,
+            )
+
         shots = 1
         if _card_id_in(cid, CANNONEER_CARD_IDS) and crowley_extra:
             shots = 2
         face = 0
         for _ in range(shots):
             face += _apply_end_turn_def(
-                defn, entity, enemy_board, defender_shield, rng=rng,
+                apply_defn, entity, enemy_board, defender_shield, rng=rng,
                 hero_health=hero_health,
             )
         total += face

@@ -235,16 +235,15 @@ def _apply_army_of_the_dead(
 
 
 def _apply_infestation(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw,) -> SpellApplyResult:
-    """虫害侵扰：两张毒刺虫 token，各 2 伤 + 2/1 突袭。"""
-    total = SpellApplyResult()
-    for _ in range(_sd(2, mult=mult, spell_power=spell_power)):
-        part = _apply_optimal_single_target_damage(
-            taunts, fighters, 2, enemy_shield=enemy_shield,
-        )
-        total.opponent_lifesteal_heal += part.opponent_lifesteal_heal
-        total.direct_face_damage += part.direct_face_damage
-        _summon_friendly_fighter(fighters, 2, 1, rush=True)
-    return total
+    """虫害侵扰：获取两张 1 费格里什毒刺虫；须再付费打出才结算 2 伤+突袭幼体。
+
+    旧实现把毒刺虫效果直接算在本牌上，导致「审判+虫害」等线少计 2 费假斩。
+    """
+    del taunts, fighters, enemy_shield, spell_power
+    count = 2 * max(int(mult), 1)
+    return SpellApplyResult(
+        add_hand_pending=[("TLC_630t", 1, 0) for _ in range(count)],
+    )
 
 
 def _apply_natural_causes(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw,) -> SpellApplyResult:

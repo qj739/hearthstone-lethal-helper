@@ -52,7 +52,7 @@ def hand_rush_minions(
         defn = get_rush_def(cid)
         if not defn:
             continue
-        cost = hand_minion_cost(card)
+        cost = hand_minion_cost(card, gs, player_id)
         if cost <= available_mana:
             result.append((card, defn, cost))
     return result

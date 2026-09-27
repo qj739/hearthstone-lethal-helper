@@ -56,6 +56,8 @@ class SpellApplyResult:
     consume_hand_entity_ids: Tuple[int, ...] = ()
     # 本步是否对敌方英雄造成过伤害（含圣盾吸收）：后续步骤应按无盾结算
     broke_enemy_hero_shield: bool = False
+    # 饮血术等：刷新英雄技能（含双英雄技能），序列后可再点一次
+    refresh_hero_powers: int = 0
 
 
 @dataclass(frozen=True)
@@ -134,7 +136,35 @@ def entity_is_dragon(entity) -> bool:
     tags = getattr(entity, "tags", {}) or {}
     if tags.get("DRAGON"):
         return True
-    return _dragon_race_value(tags) in ("DRAGON", 24)
+    if _dragon_race_value(tags) in ("DRAGON", 24):
+        return True
+    return card_id_is_dragon(getattr(entity, "card_id", "") or "")
+
+
+_DRAGON_CARD_IDS: Optional[set] = None
+
+
+def card_id_is_dragon(card_id: str) -> bool:
+    """cards.json 牌面种族是否为龙。"""
+    global _DRAGON_CARD_IDS
+    if not card_id:
+        return False
+    if _DRAGON_CARD_IDS is None:
+        ids: set = set()
+        cards_path = resource_path("json", "cards.json")
+        if cards_path.is_file():
+            try:
+                with open(cards_path, encoding="utf-8") as f:
+                    for card in json.load(f):
+                        cid = card.get("id") or ""
+                        race = card.get("race") or ""
+                        races = card.get("races") or []
+                        if race == "DRAGON" or "DRAGON" in races:
+                            ids.add(cid)
+            except (OSError, json.JSONDecodeError, TypeError, ValueError):
+                ids = set()
+        _DRAGON_CARD_IDS = ids
+    return card_id in _DRAGON_CARD_IDS
 
 
 @lru_cache(maxsize=4096)
@@ -376,6 +406,8 @@ SPELL_REQUIRES_FRIENDLY_MINION = frozenset({
     "ETC_201", "ETC_201t", "ETC_201t2",  # 一串香蕉
     "REV_842", "CORE_REV_842",  # 晋升：白银之手新兵
     "KAR_077", "CORE_KAR_077", "WON_309",  # 银月城传送门（斩杀只 buff 友方）
+    "CAP_801",  # 幽魂不散
+    "CATA_306", "CATA_306t1", "CATA_306t2",  # 教派分歧（合体 / 已裂变）
 })
 
 # 须指定友方白银之手新兵方可打出
@@ -1927,6 +1959,14 @@ _SPELL_FIXED_SCRIPT_FACE: Dict[str, int] = {
     "TLC_630t": 2,  # 格里什毒刺虫
 }
 
+# 裂变牌的 TAG_SCRIPT_DATA_NUM_1 是半张的 dbfId（教派分歧=122876），不是伤害
+_SCRIPT_DATA_NOT_DAMAGE = frozenset({
+    "CATA_306", "CATA_306t1", "CATA_306t2",
+    "CATA_134", "CATA_134t", "CATA_134t2",
+    "CATA_479", "CATA_479t", "CATA_479t2",
+    "CATA_820", "CATA_820t", "CATA_820t2",
+})
+
 
 def _fixed_spell_script_face(card_id: str) -> Optional[int]:
     if not card_id:
@@ -1949,6 +1989,8 @@ def spell_script_damage(
     if card is None:
         return default
     cid = card.card_id or ""
+    if cid in _SCRIPT_DATA_NOT_DAMAGE:
+        return 0
     mt = manathirst_spell_face_damage(cid, gs, player_id, card=card)
     if mt is not None:
         bonus = int(card.tags.get("CURRENT_SPELLPOWER_BASE", 0) or 0)
@@ -2044,6 +2086,7 @@ _SPELL_SIM_TIER_OVERRIDES: Dict[str, SpellSimTier] = {
     "CATA_489": SpellSimTier.CLEAR_AND_FACE,  # 奥术涌流（合体）
     "CATA_489t": SpellSimTier.DIRECT_FACE,    # 奥术涌流·碎裂单点
     "CATA_489t2": SpellSimTier.CLEAR_AND_FACE,  # 奥术涌流·碎裂AOE
+    "CATA_EVENT_402": SpellSimTier.CLEAR_BOARD,  # 致命贿赂：消灭随从，须先于 buff/直伤
     "EDR_461": SpellSimTier.UTILITY,            # 新月仪式
     "EDR_461t": SpellSimTier.UTILITY,           # 满月仪式
     "WW_027": SpellSimTier.UTILITY,             # 可靠陪伴 +2/+3
@@ -2054,6 +2097,10 @@ _SPELL_SIM_TIER_OVERRIDES: Dict[str, SpellSimTier] = {
     "KAR_077": SpellSimTier.UTILITY,            # 银月城传送门 +2/+2
     "CORE_KAR_077": SpellSimTier.UTILITY,
     "WON_309": SpellSimTier.UTILITY,
+    "CAP_801": SpellSimTier.UTILITY,            # 幽魂不散 +2/+3
+    "CATA_306": SpellSimTier.UTILITY,           # 教派分歧 +2/+3 并复制
+    "CATA_306t1": SpellSimTier.UTILITY,         # 已裂变：只 buff
+    "CATA_306t2": SpellSimTier.UTILITY,         # 已裂变：只复制
 
     "ETC_210": SpellSimTier.DIRECT_FACE,        # 通灵最强音（脚本伤害）
     "VAC_427": SpellSimTier.DIRECT_FACE,        # 甜筒殡淇淋 3 直伤
@@ -2084,6 +2131,7 @@ _SPELL_SIM_TIER_OVERRIDES: Dict[str, SpellSimTier] = {
     "ETC_201t2": SpellSimTier.UTILITY,
     "JAIL_326": SpellSimTier.UTILITY,           # 审判：复制友方属性到双方其他随从
     "ETC_082": SpellSimTier.UTILITY,            # 绝望哀歌：灵活解场+召唤，非纯打脸前缀
+    "EDR_814": SpellSimTier.UTILITY,            # 感染吐息：2 伤+召唤饱胀水蛭（回合结束偷血）
     "EDR_874": SpellSimTier.UTILITY,            # 星体平衡：生成月火+星火链，须完整 combo
     "MIS_707": SpellSimTier.UTILITY,            # 批量生产：自伤+抽牌，非打脸
     "JAIL_312": SpellSimTier.UTILITY,           # 私藏魔杖：生成奥术飞弹，须 combo 模拟
@@ -2372,6 +2420,7 @@ def merge_spell_apply_results(*parts: SpellApplyResult) -> SpellApplyResult:
         total.add_hand_pending.extend(part.add_hand_pending)
         if part.broke_enemy_hero_shield:
             total.broke_enemy_hero_shield = True
+        total.refresh_hero_powers += int(part.refresh_hero_powers or 0)
     return total
 
 
@@ -2951,6 +3000,7 @@ def _merge_spell_result(total: SpellApplyResult, res: SpellApplyResult) -> None:
     total.self_hero_heal += res.self_hero_heal
     if res.broke_enemy_hero_shield:
         total.broke_enemy_hero_shield = True
+    total.refresh_hero_powers += int(res.refresh_hero_powers or 0)
     # drinks_after / add_hand_spell_id 由 apply_spell_sequence 消费，不累计到 total
 
 
@@ -2981,6 +3031,7 @@ def _merge_step_result(
         total.direct_face_damage += face
     if res.broke_enemy_hero_shield:
         total.broke_enemy_hero_shield = True
+    total.refresh_hero_powers += int(res.refresh_hero_powers or 0)
 
 
 def wicked_stab_card_id_for_max_mana(max_mana: int) -> str:
@@ -3176,6 +3227,10 @@ def hand_board_spells(
             continue
         if not arcane_flow_hand_playable(card):
             continue
+        # 已裂变半张须带 SHATTERED=1；SETASIDE 预览 token 不能当手牌打出
+        if (card.card_id or "") in ("CATA_306t1", "CATA_306t2"):
+            if int((card.tags or {}).get("SHATTERED", 0) or 0) != 1:
+                continue
         defn = resolve_board_spell_def(card, gs, player_id)
         if not defn:
             continue
@@ -3349,6 +3404,7 @@ def apply_spell_sequence(
     opponent_hero_hp: Optional[int] = None,
     mana_budget: Optional[int] = None,
     next_turn_preview: bool = False,
+    assume_friendly_minion_died: bool = False,
 ) -> SpellApplyResult:
     """
     按顺序施放法术序列；支持夜影花茶回手连喝、初始之火链式衍生。
@@ -3363,6 +3419,7 @@ def apply_spell_sequence(
         opponent_hero_hp=opponent_hero_hp,
         mana_budget=mana_budget,
         next_turn_preview=next_turn_preview,
+        assume_friendly_minion_died=assume_friendly_minion_died,
     )
     return total
 
@@ -3382,6 +3439,7 @@ def apply_spell_sequence_with_meta(
     mana_budget: Optional[int] = None,
     next_turn_preview: bool = False,
     inline_hero_power_used: bool = False,
+    assume_friendly_minion_died: bool = False,
 ) -> Tuple[SpellApplyResult, Optional[int], Optional[int]]:
     """apply_spell_sequence 并返回 (结果, 我方剩余有效生命, 剩余法力)。"""
     return _apply_spell_sequence_impl(
@@ -3392,6 +3450,7 @@ def apply_spell_sequence_with_meta(
         mana_budget=mana_budget,
         next_turn_preview=next_turn_preview,
         inline_hero_power_used=inline_hero_power_used,
+        assume_friendly_minion_died=assume_friendly_minion_died,
     )
 
 
@@ -3410,6 +3469,7 @@ def _apply_spell_sequence_impl(
     mana_budget: Optional[int] = None,
     next_turn_preview: bool = False,
     inline_hero_power_used: bool = False,
+    assume_friendly_minion_died: bool = False,
 ) -> Tuple[SpellApplyResult, Optional[int], Optional[int]]:
     total = SpellApplyResult()
     roll = rng if rng is not None else random.Random(0)
@@ -3431,6 +3491,7 @@ def _apply_spell_sequence_impl(
     tyrande_double_remaining = tyrande_double_spells_remaining(gs, player_id)
     shattered_arcane_flow_entities: set = set()
     fire_spell_played_this_turn = False
+    dragon_played = False
     from .damaged_spell_power import sim_spell_power, try_inline_mage_fireblast_setup
     spell_power = sim_spell_power(gs, player_id, fighters)
     hp_used_inline = inline_hero_power_used
@@ -3439,7 +3500,9 @@ def _apply_spell_sequence_impl(
         else player_combo_active(gs, player_id)
     )
     hero_damaged_this_turn = False
-    friendly_minion_died = friendly_minion_died_this_turn(gs, player_id)
+    friendly_minion_died = bool(assume_friendly_minion_died) or friendly_minion_died_this_turn(
+        gs, player_id,
+    )
     if gs is not None and player_id is not None:
         for hc in gs.get_hand(player_id):
             if (hc.card_id or "") in ("VAC_414", "CORE_VAC_414") and hc.tags.get("POWERED_UP") == 1:
@@ -3512,6 +3575,7 @@ def _apply_spell_sequence_impl(
                     gs=gs, player_id=player_id, card=current_card,
                     opponent_hero_hp=opponent_hero_hp,
                     fire_spell_played_this_turn=fire_spell_played_this_turn,
+                    dragon_played=dragon_played,
                     spell_power=spell_power,
                     combo_active=combo_active,
                     next_turn_preview=next_turn_preview,
@@ -3530,6 +3594,8 @@ def _apply_spell_sequence_impl(
 
                 if _step_counts_as_fire_spell_played(defn, card):
                     fire_spell_played_this_turn = True
+                if entity_is_dragon(card):
+                    dragon_played = True
                 combo_active = True
 
                 consumed = getattr(card, "arcane_flow_consumed_entity_ids", None)

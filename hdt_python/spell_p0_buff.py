@@ -195,6 +195,38 @@ def _apply_dispose_of_evidence(taunts, fighters, *, mult, enemy_shield, spell_po
     return SpellApplyResult()
 
 
+def _apply_spider_bite(
+    taunts,
+    fighters,
+    *,
+    mult,
+    enemy_shield,
+    spell_power=0,
+    card=None,
+    **_kw,
+) -> SpellApplyResult:
+    """毒蛛噬咬链：本回合英雄 +N 攻、获得 N 护甲，并可能置入下一阶衍生。
+
+    JAIL_436  +1/+1 护甲 → 毒蛛美餐
+    JAIL_436t +2/+2 护甲 → 毒蛛盛宴
+    JAIL_436t2 +4/+4 护甲
+    """
+    del taunts, enemy_shield, spell_power
+    cid = (card.card_id if card and getattr(card, "card_id", None) else "") or ""
+    if cid == "JAIL_436t2":
+        atk, armor, nxt = 4, 4, None
+    elif cid == "JAIL_436t":
+        atk, armor, nxt = 2, 2, "JAIL_436t2"
+    else:
+        atk, armor, nxt = 1, 1, "JAIL_436t"
+    scale = max(int(mult), 1)
+    _add_temp_hero_attack(fighters, atk * scale)
+    res = SpellApplyResult(self_hero_heal=armor * scale)
+    if nxt:
+        res.add_hand_pending = [(nxt, 2, 0)]
+    return res
+
+
 def _apply_muster_for_battle(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw,) -> SpellApplyResult:
     """作战动员：三个 1/1 + 装备 1/4 圣光的正义（替换已有武器；新兵当回合失调）。"""
     from .weapon_p0 import _equip
@@ -594,6 +626,9 @@ def _register_p0_buff() -> None:
         (("ETC_363",), 1, "主歌乐句", _apply_verse_riff, False),
         (("BT_011",), 5, "正义圣契", _apply_libram_of_justice, False),
         (("REV_507",), 0, "处理证据", _apply_dispose_of_evidence, False),
+        (("JAIL_436",), 2, "毒蛛噬咬", _apply_spider_bite, False),
+        (("JAIL_436t",), 2, "毒蛛美餐", _apply_spider_bite, False),
+        (("JAIL_436t2",), 2, "毒蛛盛宴", _apply_spider_bite, False),
         (("CORE_GVG_061", "GVG_061"), 3, "作战动员", _apply_muster_for_battle, False),
         (("YOP_026",), 5, "树木生长", _apply_arbor_up, False),
         (("CATA_138",), 3, "森林赠礼", _apply_forests_gift, False),

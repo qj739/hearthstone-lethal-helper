@@ -116,8 +116,43 @@ def test_detectives_clothes_rush_clears_taunt_not_face_on_sick():
     print("OK detectives clothes rush no face on sick", total)
 
 
+def test_bribe_clothes_ritual_clears_taunt_lethal():
+    """嘲讽挡住打脸时：致命贿赂拆嘲讽，侦探服 +4，暮光祭礼连击 3，应对 14 血斩杀。"""
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.in_game = True
+    gs.active_player_id = 1
+    _hero(gs, 1, 1, mana=10)
+    _hero(gs, 2, 2, dmg=16)  # 14 hp
+    _minion(gs, 10, 1, 3, 4)
+    _minion(gs, 11, 1, 2, 3)
+    _minion(gs, 12, 1, 3, 5)
+    taunt = _minion(gs, 20, 2, 3, 4, card_id="JAIL_733")
+    taunt.tags["TAUNT"] = 1
+    _hand_spell(gs, 40, 1, "JAIL_447t", 4)
+    _hand_spell(gs, 41, 1, "CATA_EVENT_402", 3)
+    _hand_spell(gs, 42, 1, "CATA_785", 2)
+    for eid in (301, 302):
+        c = gs.get_entity(eid)
+        c.cardtype = "MINION"
+        c.controller = 2
+        c.zone = "DECK"
+        c.tags["ZONE"] = "DECK"
+
+    lc = LethalChecker(gs)
+    total = lc.overlay_board_face_damage()
+    note = lc.overlay_spell_note()
+    assert total >= 14, f"expected >=14, got {total} note={note}"
+    assert "侦探服" in note, note
+    assert "致命贿赂" in note, note
+    assert lc.overlay_red_prompt_ok()
+    print("OK bribe clothes ritual", total, note)
+
+
 if __name__ == "__main__":
     test_detectives_clothes_registered()
     test_detectives_clothes_buff_face_lethal()
     test_detectives_clothes_rush_clears_taunt_not_face_on_sick()
+    test_bribe_clothes_ritual_clears_taunt_lethal()
     print("all passed")

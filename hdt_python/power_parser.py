@@ -633,8 +633,9 @@ class PowerLogParser(LogWatcher):
         self._pending_transform_eids: set = set()
         # CHANGE_ENTITY 后日志常写 NUM_TURNS_IN_PLAY=0；已在场且本回合未攻击的随从应保留原值
         self._transform_preserve_ntp: Dict[int, int] = {}
-        # FULL_ENTITY Updating：方括号为坟场等「终态」时，忽略行内历史 ZONE=PLAY（时光回溯）
-        # SETASIDE 只是召唤过渡区，PowerTaskList 括号常滞后，不能用来把已在 PLAY 的单位打回 SETASIDE
+        # FULL_ENTITY Updating：PowerTaskList 方括号为坟场等终态时，忽略行内滞后 ZONE=PLAY
+        # GameState 行内 ZONE 为准（抹除存在被回溯撤销时，括号仍可能停在 GRAVEYARD）
+        # SETASIDE 不拦截：随后 TAG_CHANGE ZONE=PLAY 必须生效
         self._full_entity_is_updating = False
         self._full_entity_bracket_zone: Optional[str] = None
         self._FULL_ENTITY_BRACKET_OVERRIDE_ZONES = frozenset({
@@ -766,8 +767,10 @@ class PowerLogParser(LogWatcher):
             return
 
         # 时光回溯等：RESET_GAME 后会 FULL_ENTITY 重放场面，先清掉未再出现的随从
+        # PowerTaskList 是动画滞后重放，不可再清一次（会抹掉 GameState 已恢复的场面）
         if "RESET_GAME" in line:
-            self._handle_reset_game()
+            if not self._from_power_tasklist:
+                self._handle_reset_game()
             return
 
         # FULL_ENTITY
@@ -1017,14 +1020,18 @@ class PowerLogParser(LogWatcher):
                     entity.reset_for_new_card(card_id)
                 else:
                     entity.card_id = card_id
-            # Updating 且方括号为坟场/牌库等终态：先落到该区域，避免行内历史 ZONE=PLAY 复活
-            # 勿用 SETASIDE 覆盖：通灵最强音等先 SETASIDE 再进 PLAY，TaskList 括号常仍停在 SETASIDE
+            # PowerTaskList Updating 且方括号为坟场等：若当前已不在 PLAY，先落到该区，
+            # 避免动画重放 ZONE=PLAY 幽灵复活；已在 PLAY 的不降级（括号常滞后）。
             if (
                 self._full_entity_is_updating
+                and self._from_power_tasklist
                 and self._full_entity_bracket_zone
                 in self._FULL_ENTITY_BRACKET_OVERRIDE_ZONES
             ):
-                self._apply_tag(eid, "ZONE", self._full_entity_bracket_zone)
+                from .board_damage import entity_zone as _ez
+
+                if _ez(entity) != "PLAY":
+                    self._apply_tag(eid, "ZONE", self._full_entity_bracket_zone)
             self.game_state.current_entity_id = eid
             self.emit("entity_created", entity)
 
@@ -1406,8 +1413,8 @@ class PowerLogParser(LogWatcher):
             if preserve is not None and preserve >= 1:
                 int_value = preserve
 
-        # FULL_ENTITY Updating：方括号为坟场等终态时，忽略行内历史 ZONE=PLAY（时光回溯快照）
-        # SETASIDE 不拦截：随后 TAG_CHANGE ZONE=PLAY 必须生效，否则死忠歌迷等会卡在 SETASIDE
+        # PowerTaskList FULL_ENTITY：方括号坟场等终态时忽略行内滞后 ZONE=PLAY
+        # GameState 不拦截（时光回溯真回场时括号可能仍写 GRAVEYARD）
         if tag == "ZONE":
             zones_probe = [
                 "", "PLAY", "DECK", "HAND", "GRAVEYARD",
@@ -1421,6 +1428,7 @@ class PowerLogParser(LogWatcher):
             bracket_z = (self._full_entity_bracket_zone or "").upper()
             if (
                 self._full_entity_is_updating
+                and self._from_power_tasklist
                 and bracket_z in self._FULL_ENTITY_BRACKET_OVERRIDE_ZONES
                 and new_zone == "PLAY"
             ):
@@ -1508,7 +1516,15 @@ class PowerLogParser(LogWatcher):
             if entity.is_weapon and int_value > 0:
                 entity.durability = int_value
         elif tag == "DAMAGE" and int_value is not None:
+            old_damage = int(entity.damage or 0)
             entity.damage = int_value
+            # 英雄受到生命伤害时若护甲标签仍>0：日志漏了 ARMOR 结算，清掉以免虚高血线漏斩
+            if (
+                entity.is_hero
+                and int_value > old_damage
+                and int(entity.tags.get("ARMOR", 0) or 0) > 0
+            ):
+                entity.tags["ARMOR"] = 0
             if entity.current_health <= 0 and entity.is_minion:
                 entity.zone = "GRAVEYARD"
                 entity.tags["ZONE"] = 4

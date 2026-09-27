@@ -167,6 +167,13 @@ def _apply_arcane_shot(taunts, fighters, *, mult, enemy_shield, spell_power=0, *
     )
 
 
+def _apply_stone(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw) -> SpellApplyResult:
+    """石头 WW_001t（狗头人矿工发掘衍生）：对一个敌人造成 3 点伤害。"""
+    return _apply_optimal_single_target_damage(
+        taunts, fighters, _sd(3, mult=mult, spell_power=spell_power), enemy_shield=enemy_shield,
+    )
+
+
 def _apply_fireball(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw) -> SpellApplyResult:
     return _apply_optimal_single_target_damage(
         taunts, fighters, _sd(6, mult=mult, spell_power=spell_power), enemy_shield=enemy_shield,
@@ -429,10 +436,24 @@ def _apply_bursting_shot(taunts, fighters, *, mult, enemy_shield, spell_power=0,
     )
 
 
-def _apply_scorching_winds(taunts, fighters, *, mult, enemy_shield, spell_power=0, rng=None, card=None, **_kw) -> SpellApplyResult:
-    """灼烧之风：3 伤；亮边（手牌有火焰法术可弃）再 +3。"""
+def _apply_scorching_winds(
+    taunts, fighters, *, mult, enemy_shield, spell_power=0, rng=None,
+    card=None, gs=None, player_id=None, **_kw,
+) -> SpellApplyResult:
+    """灼烧之风：3 伤；亮边或手牌另有火焰法术可弃时再 +3。"""
+    from .spell_board import is_fire_spell
+
     dmg = _sd(3, mult=mult, spell_power=spell_power)
-    if hand_effect_active(card):
+    powered = hand_effect_active(card)
+    if not powered and gs is not None and player_id is not None:
+        winds_eid = getattr(card, "entity_id", None)
+        for other in gs.get_hand(player_id):
+            if winds_eid is not None and other.entity_id == winds_eid:
+                continue
+            if is_fire_spell(other):
+                powered = True
+                break
+    if powered:
         dmg += _sd(3, mult=mult, spell_power=spell_power)
     return _apply_optimal_single_target_damage(
         taunts, fighters, dmg, enemy_shield=enemy_shield,
@@ -537,6 +558,7 @@ def _register_p0_direct() -> None:
         (("CATA_303",), 2, "净化吐息", _apply_purifying_breath, False),
         (("TIME_611",), 2, "时间停滞", _apply_timestop, False),
         (("DS1_185", "CORE_DS1_185"), 1, "奥术射击", _apply_arcane_shot, False),
+        (("WW_001t",), 1, "石头", _apply_stone, False),
         (("CS2_029", "CORE_CS2_029"), 4, "火球术", _apply_fireball, False),
         (("JAIL_941t",), 2, "黑暗之拥", _apply_dark_embrace, False),
         (("JAIL_941",), 2, "神圣之拥", _apply_holy_embrace, False),

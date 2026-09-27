@@ -571,7 +571,12 @@ def hand_minion_has_charge(gs: "GameState", entity: "Entity") -> bool:
     return has_dark_gift_charge(gs, entity)
 
 
-def hand_minion_cost(entity: "Entity") -> int:
+def hand_minion_cost(
+    entity: "Entity",
+    gs: Optional["GameState"] = None,
+    player_id: Optional[int] = None,
+) -> int:
+    """手牌随从打出所需法力。残骸费用（CORPSE_SPENDER）不占法力，够残骸时返回 0。"""
     base_cost = int(entity.cost) if entity.cost and entity.cost > 0 else 0
     raw_tag = entity.tags.get("COST")
     tag_cost: Optional[int] = None
@@ -583,6 +588,7 @@ def hand_minion_cost(entity: "Entity") -> int:
                 base_cost = max(base_cost, tc)
         except (TypeError, ValueError):
             pass
+    mana_cost = 0
     prepared_raw = entity.tags.get("PREPARED")
     if prepared_raw is not None:
         try:
@@ -590,17 +596,34 @@ def hand_minion_cost(entity: "Entity") -> int:
             if prepared > 0 and base_cost > 0:
                 prep_cost = max(0, base_cost - prepared)
                 if tag_cost is None:
-                    return prep_cost
-                if tag_cost >= base_cost and prep_cost < base_cost:
-                    return prep_cost
-                return tag_cost
+                    mana_cost = prep_cost
+                elif tag_cost >= base_cost and prep_cost < base_cost:
+                    mana_cost = prep_cost
+                else:
+                    mana_cost = tag_cost
+            elif tag_cost is not None:
+                mana_cost = tag_cost
+            elif entity.cost > 0:
+                mana_cost = int(entity.cost)
         except (TypeError, ValueError):
-            pass
-    if tag_cost is not None:
-        return tag_cost
-    if entity.cost > 0:
-        return int(entity.cost)
-    return 0
+            if tag_cost is not None:
+                mana_cost = tag_cost
+            elif entity.cost > 0:
+                mana_cost = int(entity.cost)
+    elif tag_cost is not None:
+        mana_cost = tag_cost
+    elif entity.cost > 0:
+        mana_cost = int(entity.cost)
+
+    # 残骸代替法力：COST 数值是残骸数，法力为 0
+    if int(entity.tags.get("CORPSE_SPENDER", 0) or 0) == 1:
+        corpse_need = mana_cost if mana_cost > 0 else int(entity.tags.get("COST", 0) or 0)
+        if gs is not None and player_id is not None and corpse_need > 0:
+            from .spell_board import player_corpses
+            if player_corpses(gs, player_id) < corpse_need:
+                return 999
+        return 0
+    return mana_cost
 
 
 def hand_minion_attack(entity: "Entity") -> int:
@@ -645,7 +668,7 @@ def collect_hand_rush_minions(
             continue
         if get_rush_def(card.card_id or "") is None:
             continue
-        cost = hand_minion_cost(card)
+        cost = hand_minion_cost(card, gs, player_id)
         if cost > available_mana:
             continue
         atk = hand_minion_attack(card)
@@ -713,7 +736,7 @@ def collect_hand_charge_minions(
             return
         if not hand_minion_has_charge(gs, card):
             return
-        cost = hand_minion_cost(card)
+        cost = hand_minion_cost(card, gs, player_id)
         atk = hand_minion_attack(card)
         if atk <= 0:
             return
@@ -733,11 +756,11 @@ def collect_hand_charge_minions(
 
 
 def _minion_summoned_this_turn(entity: "Entity") -> bool:
-    """是否本回合刚进入场面（对齐 HDT：NUM_TURNS_IN_PLAY 缺失视为 0）。"""
-    if _tag(entity, "SUMMONING_SICKNESS") or _tag(entity, "1196"):
-        return True
-    if _tag(entity, "JUST_PLAYED"):
-        return True
+    """是否本回合刚进入场面（对齐 HDT：NUM_TURNS_IN_PLAY 缺失视为 0）。
+
+    JUST_PLAYED / 1196 会留到本回合第一次攻击之后才清掉。对手把随从放到
+    我方一侧时，下回合 NUM_TURNS_IN_PLAY 已是 1，不能再靠这两个标签判失调。
+    """
     # 休眠刚苏醒：本回合仍有召唤失调，不可攻击（玛瑟里顿等）
     if _tag(entity, "DORMANT_AWAKENED_THIS_TURN"):
         return True

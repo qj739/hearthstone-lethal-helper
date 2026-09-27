@@ -39,6 +39,7 @@ from .hero_power_board import (
     has_usable_hero_power,
     usable_hero_power,
     apply_hero_power_to_fighters,
+    apply_all_usable_hero_powers,
     hero_power_should_inline_in_sequence,
 )
 from .spell_board import (
@@ -1358,6 +1359,7 @@ class LethalChecker:
     ) -> Tuple[List[dict], Optional[int], Optional[str], SpellApplyResult, List[dict]]:
         """可选：先使用英雄技能，返回 (fighters, 剩余法力, 技能名, 技能结果, 技能后敌方场面)。"""
         base_enemy = _clone_combat_states(enemy or [])
+        self._line_hp_corpses_left = None
         if not use_hp:
             return (
                 _clone_combat_states(fighters), mana, None,
@@ -1365,14 +1367,17 @@ class LethalChecker:
             )
         fs = _clone_combat_states(fighters)
         next_turn = self._hero_power_next_turn()
-        row = usable_hero_power(
-            self.game_state, player_id, mana or 0, next_turn=next_turn,
-        )
-        if row is None:
-            return fs, mana, None, SpellApplyResult(), base_enemy
-        _hp, defn, cost = row
         if hp_mode == "setup":
             from .damaged_spell_power import apply_mage_fireblast_setup
+            row = usable_hero_power(
+                self.game_state, player_id, mana or 0, next_turn=next_turn,
+            )
+            if row is None:
+                return (
+                    _clone_combat_states(fighters), mana, None,
+                    SpellApplyResult(), base_enemy,
+                )
+            _hp, defn, cost = row
             if not apply_mage_fireblast_setup(fs):
                 return (
                     _clone_combat_states(fighters), mana, None,
@@ -1380,13 +1385,45 @@ class LethalChecker:
                 )
             mana_left = None if mana is None else mana - cost
             return fs, mana_left, defn.name, SpellApplyResult(), base_enemy
-        applied, mana_left, hp_res = apply_hero_power_to_fighters(
+        applied, mana_left, names, hp_res, corpses_left = apply_all_usable_hero_powers(
             self.game_state, player_id, fs, mana, enemy_shield=defender_shield,
             next_turn=next_turn, taunts=base_enemy,
         )
         if not applied:
             return fs, mana, None, SpellApplyResult(), _clone_combat_states(enemy or [])
-        return fs, mana_left, defn.name, hp_res, base_enemy
+        self._line_hp_corpses_left = corpses_left
+        return fs, mana_left, "+".join(names), hp_res, base_enemy
+
+    def _reapply_hero_powers_after_refresh(
+        self,
+        fighters: List[dict],
+        mana_left: Optional[int],
+        *,
+        defender_shield: bool = False,
+        enemy: Optional[List[dict]] = None,
+        refresh_count: int = 0,
+    ) -> Tuple[Optional[int], int]:
+        """饮血术等刷新后，再点一轮可用英雄技能。返回 (剩余法力, 本轮直伤)。"""
+        if refresh_count <= 0:
+            return mana_left, 0
+        local = self.game_state.local_player_id
+        if local is None:
+            return mana_left, 0
+        corpses = getattr(self, "_line_hp_corpses_left", None)
+        direct = 0
+        for _ in range(max(1, refresh_count)):
+            applied, mana_left, _names, hp_res, corpses = apply_all_usable_hero_powers(
+                self.game_state, local, fighters, mana_left,
+                enemy_shield=defender_shield,
+                next_turn=self._hero_power_next_turn(),
+                taunts=enemy,
+                corpses_budget=corpses,
+            )
+            if not applied:
+                break
+            direct += int(hp_res.direct_face_damage or 0)
+            self._line_hp_corpses_left = corpses
+        return mana_left, direct
 
     @staticmethod
     def _stolen_minion_face(fighters: List[dict], defender_shield: bool = False) -> int:
@@ -2023,6 +2060,67 @@ class LethalChecker:
             battlecry_face=battlecry_face,
         )
 
+    def _seq_card_ids(self, seq: List) -> set:
+        from .interleave_board import step_card_id
+
+        return {step_card_id(defn, card) for defn, _, card in seq}
+
+    def _sacrifice_charger_for_boneblade(
+        self,
+        enemy: List[dict],
+        fighters: List[dict],
+        seq: List,
+    ) -> bool:
+        """
+        骨刃乱舞未亮边时：用 1 攻冲锋随从撞死在敌方随从上（友方死亡亮边 +3），
+        再靠序列里的点杀清掉残血，使 6 点都打脸。
+        只牺牲 1 攻，且点杀足够收掉残血，避免白丢打脸。
+        """
+        from .spell_board import friendly_minion_died_this_turn
+
+        if friendly_minion_died_this_turn(
+            self.game_state, self.game_state.local_player_id,
+        ):
+            return False
+        ids = self._seq_card_ids(seq)
+        if "JAIL_445" not in ids and "CORE_JAIL_445" not in ids:
+            return False
+        removal = 5 if ("TIME_216" in ids or "CORE_TIME_216" in ids) else 0
+        best: Optional[Tuple[dict, dict]] = None
+        for fighter in fighters:
+            if fighter.get("kind") != "minion":
+                continue
+            if int(fighter.get("health", 0) or 0) <= 0:
+                continue
+            if int(fighter.get("attacks_left", 0) or 0) <= 0:
+                continue
+            if int(fighter.get("atk", 0) or 0) != 1:
+                continue
+            if fighter.get("shield"):
+                continue
+            for target in enemy:
+                if int(target.get("health", 0) or 0) <= 0 or target.get("shield"):
+                    continue
+                if target.get("kind") == "hero":
+                    continue
+                hp = int(fighter.get("health", 0) or 0)
+                if int(target.get("atk", 0) or 0) < hp and not target.get("poisonous"):
+                    continue
+                remain = int(target.get("health", 0) or 0) - 1
+                if remain > removal:
+                    continue
+                best = (fighter, target)
+                break
+            if best is not None:
+                break
+        if best is None:
+            return False
+        fighter, target = best
+        self._apply_single_attack(
+            fighter, target, enemy_board=enemy, fighters=fighters,
+        )
+        return int(fighter.get("health", 0) or 0) <= 0
+
     def _simulate_line_outcome(
         self,
         base_enemy_minions: List[dict],
@@ -2068,13 +2166,21 @@ class LethalChecker:
             return True
 
         if order == "spell_first":
+            sacrificed = self._sacrifice_charger_for_boneblade(enemy, fs, seq)
             spell_res, hp_end, mana_end = apply_spell_sequence_with_meta(
                 enemy, fs, seq, spell_mult=spell_mult,
                 enemy_shield=defender_shield, rng=rng,
                 gs=self.game_state, player_id=self.game_state.local_player_id,
                 hero_hp=hero_hp, mana_budget=available_mana,
                 next_turn_preview=self._hero_power_next_turn(),
+                assume_friendly_minion_died=sacrificed,
             )
+            mana_end, refresh_direct = self._reapply_hero_powers_after_refresh(
+                fs, mana_end, defender_shield=defender_shield, enemy=enemy,
+                refresh_count=int(getattr(spell_res, "refresh_hero_powers", 0) or 0),
+            )
+            if refresh_direct:
+                hp_direct += refresh_direct
             after_shield = _shield_after_spells(spell_res, defender_shield)
             spell_res = _add_extra(spell_res)
             # 红牌解嘲后：场攻能否把英雄压到唯一最低血 → 球霸等记入打脸
@@ -2133,12 +2239,19 @@ class LethalChecker:
                         opponent_hero_hp=opp_hp_hold,
                         next_turn_preview=self._hero_power_next_turn(),
                     )
+                    mana_end, refresh_direct = self._reapply_hero_powers_after_refresh(
+                        fs_hold, available_mana, defender_shield=hold_shield,
+                        enemy=enemy_hold,
+                        refresh_count=int(getattr(spell_res_hold, "refresh_hero_powers", 0) or 0),
+                    )
+                    hold_hp_direct = hp_direct + refresh_direct
                     hold_shield = _shield_after_spells(spell_res_hold, hold_shield)
                     spell_res_hold.direct_face_damage += extra_spell_face
-                    mana_end = self._mana_after_spell_sequence(seq, available_mana)
+                    if mana_end is None:
+                        mana_end = self._mana_after_spell_sequence(seq, available_mana)
                     if self._hero_dead_after_spells(hp_end_hold):
                         outcomes.append(self._face_outcome_hero_dead_after_spells(
-                            enemy_hold, spell_res_hold, hold_shield, hp_direct,
+                            enemy_hold, spell_res_hold, hold_shield, hold_hp_direct,
                             lifesteal_heal=int(spell_res_hold.opponent_lifesteal_heal or 0),
                             rng=rng,
                         ))
@@ -2150,7 +2263,7 @@ class LethalChecker:
                     )
                     outcomes.append(self._attach_lifesteal(
                         self._finish_hold_after_attacks(
-                            enemy_hold, fs_hold, spell_comp_hold, hp_direct,
+                            enemy_hold, fs_hold, spell_comp_hold, hold_hp_direct,
                             hold_shield, rng=rng, fighters_for_et=fs_hold,
                         ),
                         int(spell_res_hold.opponent_lifesteal_heal or 0),
@@ -2189,6 +2302,12 @@ class LethalChecker:
                 opponent_hero_hp=opp_hp_for_spell,
                 next_turn_preview=self._hero_power_next_turn(),
             )
+            mana_after_refresh, refresh_direct = self._reapply_hero_powers_after_refresh(
+                fs, available_mana, defender_shield=atk_shield, enemy=enemy,
+                refresh_count=int(getattr(spell_res, "refresh_hero_powers", 0) or 0),
+            )
+            if refresh_direct:
+                hp_direct += refresh_direct
             atk_shield = _shield_after_spells(spell_res, atk_shield)
             spell_res.direct_face_damage += extra_spell_face
             # 球霸等：红牌解嘲后用「剩余打脸」判断能否把英雄压到唯一最低血
@@ -2522,6 +2641,7 @@ class LethalChecker:
                         break
                     enemy = _clone_combat_states(base_enemy_minions)
                     fs = _clone_combat_states(fighters)
+                    sacrificed = self._sacrifice_charger_for_boneblade(enemy, fs, seq)
                     spell_parts: List[SpellApplyResult] = []
                     mana_end = available_mana
                     hero_end = hero_hp
@@ -2532,6 +2652,7 @@ class LethalChecker:
                             gs=self.game_state, player_id=local_id,
                             hero_hp=hero_end, mana_budget=mana_end,
                             next_turn_preview=self._hero_power_next_turn(),
+                            assume_friendly_minion_died=sacrificed,
                         )
                         spell_parts.append(det_res)
                     rand_res, hero_end, mana_end = apply_spell_sequence_with_meta(
@@ -2540,6 +2661,7 @@ class LethalChecker:
                         gs=self.game_state, player_id=local_id,
                         hero_hp=hero_end, mana_budget=mana_end,
                         next_turn_preview=self._hero_power_next_turn(),
+                        assume_friendly_minion_died=sacrificed,
                     )
                     spell_parts.append(rand_res)
                     spell_res = merge_spell_apply_results(*spell_parts)
@@ -2622,6 +2744,7 @@ class LethalChecker:
             if use_det_rand_mc:
                 enemy = _clone_combat_states(base_enemy_minions)
                 fs = _clone_combat_states(fighters)
+                sacrificed = self._sacrifice_charger_for_boneblade(enemy, fs, seq)
                 spell_parts: List[SpellApplyResult] = []
                 mana_end = available_mana
                 hero_end = hero_hp
@@ -2632,6 +2755,7 @@ class LethalChecker:
                         gs=self.game_state, player_id=local_id,
                         hero_hp=hero_end, mana_budget=mana_end,
                         next_turn_preview=self._hero_power_next_turn(),
+                        assume_friendly_minion_died=sacrificed,
                     )
                     spell_parts.append(det_res)
                 rand_res, hero_end, mana_end = apply_spell_sequence_with_meta(
@@ -2640,6 +2764,7 @@ class LethalChecker:
                     gs=self.game_state, player_id=local_id,
                     hero_hp=hero_end, mana_budget=mana_end,
                     next_turn_preview=self._hero_power_next_turn(),
+                    assume_friendly_minion_died=sacrificed,
                 )
                 spell_parts.append(rand_res)
                 spell_res = merge_spell_apply_results(*spell_parts)
@@ -3109,6 +3234,7 @@ class LethalChecker:
         player_id: Optional[int] = None,
         opp_taunts: Optional[list] = None,
         ignore_budget: bool = False,
+        hero_power_name: Optional[str] = None,
     ) -> int:
         """将当前最优打法写入 Overlay 统计；含随机/回合结束时跑 MC。"""
         pure_board = pure_immediate
@@ -3149,9 +3275,24 @@ class LethalChecker:
             ):
                 needs_random = False
         if needs_random:
+            mc_enemy = base_enemy_minions
+            mc_fighters = fighters
+            # 食尸鬼冲锋等是先召唤再攻击，不在法术序列里。
+            # 重放 MC 时要用同一批随从，否则技能那 1 点、以及拿它撞死亮骨刃的线都会丢。
+            if hero_power_name and player_id is not None:
+                prepared, _, prepared_name, _, prepared_enemy = (
+                    self._prepare_line_with_hero_power(
+                        fighters, player_id, available_mana,
+                        use_hp=True, defender_shield=defender_shield,
+                        enemy=base_enemy_minions, hp_mode="face",
+                    )
+                )
+                if prepared_name:
+                    mc_fighters = prepared
+                    mc_enemy = prepared_enemy
             if sim_seq:
                 mc_max, prob, top_outcomes = self._monte_carlo_line_stats(
-                    base_enemy_minions, fighters, sim_seq, best_order,
+                    mc_enemy, mc_fighters, sim_seq, best_order,
                     spell_mult=spell_mult,
                     defender_shield=defender_shield,
                     effective_hp=effective_hp,
@@ -3443,6 +3584,11 @@ class LethalChecker:
                         next_turn_preview=self._hero_power_next_turn(),
                         inline_hero_power_used=use_hp,
                     )
+                    mana_end, refresh_direct = self._reapply_hero_powers_after_refresh(
+                        fs, mana_end, defender_shield=line_shield, enemy=enemy,
+                        refresh_count=int(getattr(spell_res, "refresh_hero_powers", 0) or 0),
+                    )
+                    line_hp_direct = hp_direct + refresh_direct
                     if line_direct:
                         spell_res.direct_face_damage += line_direct
                     after_shield = (
@@ -3459,7 +3605,7 @@ class LethalChecker:
                     seen_fp.add(fp)
                     sf = self._spell_first_face_from_state(
                         enemy, fs, spell_res, mana_end, charges, after_shield,
-                        hp_direct,
+                        line_hp_direct,
                         hero_hp_after_spells=hp_end,
                     )
                     candidates = [("spell_first", sf)]
@@ -3699,6 +3845,7 @@ class LethalChecker:
                 player_id=player_id,
                 opp_taunts=opp_taunts,
                 ignore_budget=timed_out,
+                hero_power_name=show_hp_name,
             )
             self._overlay_best_seq = show_seq
             self._overlay_best_order = show_order
@@ -4532,15 +4679,13 @@ class LethalChecker:
             if not card.is_minion:
                 continue
             charge_damage = None
-            base_cost = 0
             if card.card_id in CHARGE_MINIONS_DB:
-                base_cost, charge_damage = CHARGE_MINIONS_DB[card.card_id]
+                _, charge_damage = CHARGE_MINIONS_DB[card.card_id]
             elif hand_minion_has_charge(self.game_state, card):
-                base_cost = hand_minion_cost(card)
                 charge_damage = hand_minion_attack(card)
             else:
                 continue
-            actual_cost = card.cost if card.cost > 0 else base_cost
+            actual_cost = hand_minion_cost(card, self.game_state, attacker_id)
             if actual_cost <= available_mana and charge_damage > 0:
                 from .board_damage import attacks_per_turn, is_silenced
 

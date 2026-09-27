@@ -528,6 +528,17 @@ def _apply_flame_chain(taunts, fighters, *, mult, enemy_shield, spell_power=0, c
     return res
 
 
+def _apply_drink_blood(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw):
+    """饮血术：3 点随从伤害（吸血）并刷新英雄技能。"""
+    res = _minion_damage_fn(
+        3, self_lifesteal=True, allow_no_taunt_minion_targets=True,
+    )(
+        taunts, fighters, mult=mult, enemy_shield=enemy_shield, spell_power=spell_power, **_kw,
+    )
+    res.refresh_hero_powers = 1
+    return res
+
+
 def _register_p0_minion() -> None:
     specs: List[tuple] = [
         # (card_ids, cost, name, apply_fn, uses_random, cost_fn?)
@@ -567,7 +578,7 @@ def _register_p0_minion() -> None:
         (("CATA_978",), 5, "辛达苟萨的胜利", _minion_damage_fn(8), False, None),
         (("SCH_512",), 6, "通窍", _apply_initiation, False, None),
         # 逃离紫罗兰堡 / DK：点解嘲讽，避免硬核信徒等战吼被挪去清嘲
-        (("JAIL_441",), 2, "饮血术", _minion_damage_fn(3, self_lifesteal=True), False, None),
+        (("JAIL_441",), 2, "饮血术", _apply_drink_blood, False, None),
         (("RLK_024",), 4, "灵界打击", _minion_damage_fn(6, self_lifesteal=True), False, None),
     ]
     for card_ids, cost, name, fn, uses_random, cost_fn in specs:

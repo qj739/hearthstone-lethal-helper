@@ -139,6 +139,38 @@ def _apply_rogue_dagger(atk: int, dur: int, card_id: str):
     return _fn
 
 
+def _apply_vampyr_kiss(t, f: List[dict], *, mult: int = 1, **_kw) -> SpellApplyResult:
+    """吸血鬼之吻：使一个随从 +3 攻（斩杀取可打脸的最高攻友方随从）。"""
+    bonus = 3 * mult
+    if bonus <= 0:
+        return SpellApplyResult()
+
+    def _candidates(*, require_face: bool):
+        out = []
+        for fighter in f:
+            if fighter.get("kind") in ("hero", "weapon"):
+                continue
+            if int(fighter.get("health", 0) or 0) <= 0:
+                continue
+            if require_face:
+                if int(fighter.get("attacks_left", 0) or 0) <= 0:
+                    continue
+                if not fighter.get("can_face", True):
+                    continue
+            out.append(fighter)
+        return out
+
+    pool = _candidates(require_face=True) or _candidates(require_face=False)
+    if not pool:
+        return SpellApplyResult()
+    best = max(
+        pool,
+        key=lambda fr: (int(fr.get("atk", 0) or 0), int(fr.get("entity_id", 0) or 0)),
+    )
+    best["atk"] = int(best.get("atk", 0) or 0) + bonus
+    return SpellApplyResult()
+
+
 _register_hero_power(BoardSpellDef(
     ("__dh_claws_1",),
     1,
@@ -210,4 +242,10 @@ _register_hero_power(BoardSpellDef(
     2,
     "跃动的南瓜",
     _apply_bouncing_pumpkin,
+))
+_register_hero_power(BoardSpellDef(
+    ("JAIL_446hp",),
+    3,
+    "吸血鬼之吻",
+    _apply_vampyr_kiss,
 ))

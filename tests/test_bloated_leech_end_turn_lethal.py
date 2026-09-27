@@ -49,7 +49,8 @@ def _minion(gs, eid, pid, atk, hp, *, card_id="m", exhausted=0, ntp=1):
     m.tags["ATK"] = atk
     m.tags["479"] = atk
     m.tags["HEALTH"] = hp
-    m.tags["NUM_ATTACKS_THIS_TURN"] = 0
+    # 已攻击：须同时设 EXHAUSTED 与 NUM_ATTACKS_THIS_TURN，否则会当作陈旧疲劳清掉
+    m.tags["NUM_ATTACKS_THIS_TURN"] = 1 if exhausted else 0
     m.tags["EXHAUSTED"] = exhausted
     m.tags["NUM_TURNS_IN_PLAY"] = ntp
     pos = len(gs.board_slots.setdefault(pid, {})) + 1
@@ -100,6 +101,30 @@ def test_bloated_leech_end_turn_faces_empty_board():
     face, notes = end_turn_face_damage(gs.get_board(1), [], False, game_state=gs, player_id=1)
     assert face == 2, f"expected 2 from two leeches, got {face} {notes}"
     assert any("饱胀水蛭" in n for n in notes)
+
+
+def test_ugly_remains_buffs_leech_steal():
+    """丑恶的残躯在场：每条水蛭偷血 1+1=2；两条共 4，对手 4 血应斩。"""
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.active_player_id = 1
+    gs.in_game = True
+    _hero(gs, 10, 1, mana=10)
+    _hero(gs, 20, 2, dmg=14, health=18)  # 4 血
+    _minion(gs, 40, 1, 3, 5, card_id="EDR_810", exhausted=1, ntp=0)
+    _minion(gs, 41, 1, 0, 2, card_id="EDR_810t", exhausted=1, ntp=0)
+    _minion(gs, 42, 1, 0, 2, card_id="EDR_810t", exhausted=1, ntp=0)
+    for eid in (301, 302, 303):
+        _deck(gs, eid, 2)
+
+    face, notes = end_turn_face_damage(gs.get_board(1), [], False, game_state=gs, player_id=1)
+    assert face == 4, f"expected 4 with Ugly Remains aura, got {face} {notes}"
+
+    lc = LethalChecker(gs)
+    total, _, lethal = lc.calculate_lethal_potential()
+    assert lc.overlay_end_turn_face_for_display() >= 4
+    assert lethal, f"should lethal total={total} note={lc.overlay_spell_note()}"
 
 
 def test_bloated_leech_enables_lethal_after_face():
@@ -153,9 +178,64 @@ def test_blood_infection_summons_leeches_for_end_turn():
     assert any(c.card_id == "EDR_817" for c, _, _ in hand_board_spells(gs, 1, 10))
 
 
+def _hero_power(gs, eid, pid, card_id="HERO_11bp", cost=2):
+    p = gs.get_entity(eid)
+    p.cardtype = "HERO_POWER"
+    p.controller = pid
+    p.zone = "PLAY"
+    p.card_id = card_id
+    p.cost = cost
+    p.tags["ZONE"] = "PLAY"
+    p.tags["COST"] = cost
+    p.tags["EXHAUSTED"] = 0
+    if not hasattr(gs, "hero_power_entity_ids"):
+        gs.hero_power_entity_ids = {}
+    gs.hero_power_entity_ids[pid] = eid
+    return p
+
+
+def test_infested_breath_not_direct_prefix_tier():
+    """感染吐息须走 combo（召唤水蛭回合结束），不能进无嘲讽直伤前缀。"""
+    from hdt_python.spell_board import spell_sim_tier_for_card, SpellSimTier
+
+    spell_sim_tier_for_card.cache_clear()
+    assert spell_sim_tier_for_card("EDR_814") == SpellSimTier.UTILITY
+
+
+def test_infested_breath_ghoul_leech_lethal():
+    """复盘：对手 4 血；场面已攻完；技能食尸鬼 + 感染吐息(2+水蛭回1) = 4 斩。"""
+    from hdt_python.spell_board import spell_sim_tier_for_card
+
+    spell_sim_tier_for_card.cache_clear()
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.active_player_id = 1
+    gs.in_game = True
+    _hero(gs, 10, 1, mana=4)
+    _hero(gs, 20, 2, dmg=26, health=30)  # 4 血
+    _minion(gs, 30, 1, 2, 3, card_id="JAIL_998", exhausted=1, ntp=2)
+    _minion(gs, 31, 1, 1, 1, card_id="CATA_780t", exhausted=1, ntp=1)
+    _hand_spell(gs, 40, 1, "EDR_814", 2)
+    _hero_power(gs, 50, 1, "HERO_11bp", 2)
+    for eid in (301, 302, 303):
+        _deck(gs, eid, 2)
+
+    lc = LethalChecker(gs)
+    total, _, lethal = lc.calculate_lethal_potential()
+    face = lc.overlay_board_face_damage()
+    note = lc.overlay_spell_note()
+    assert face >= 4, f"face={face} note={note}"
+    assert lethal, f"should lethal total={total} face={face} note={note}"
+    assert "感染吐息" in note
+
+
 if __name__ == "__main__":
     test_bloated_leech_end_turn_registered()
     test_bloated_leech_end_turn_faces_empty_board()
+    test_ugly_remains_buffs_leech_steal()
     test_bloated_leech_enables_lethal_after_face()
     test_blood_infection_summons_leeches_for_end_turn()
+    test_infested_breath_not_direct_prefix_tier()
+    test_infested_breath_ghoul_leech_lethal()
     print("ok")

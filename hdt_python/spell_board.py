@@ -25,6 +25,8 @@ MC_TRIALS = 2000
 MAX_SPELL_SEQUENCES: Optional[int] = None
 # 单条 combo 最多几张法术；None = 不限制
 MAX_SPELL_COMBO_LEN: Optional[int] = 7
+# 己方场面最多 7 个随从；满场时法术/技能/战吼都不能再召唤
+MAX_BOARD_MINIONS = 7
 
 
 def _rng_or_default(rng: Optional[random.Random] = None) -> random.Random:
@@ -223,6 +225,48 @@ def unit_is_dragon(unit: dict) -> bool:
     return race in ("DRAGON", 24)
 
 
+_UNDEAD_CARD_IDS: Optional[set] = None
+_KNOWN_UNDEAD_CARD_IDS = frozenset({"HERO_11bpt"})
+
+
+def card_id_is_undead(card_id: str) -> bool:
+    """cards.json 牌面种族是否为亡灵。"""
+    global _UNDEAD_CARD_IDS
+    if not card_id:
+        return False
+    if card_id in _KNOWN_UNDEAD_CARD_IDS:
+        return True
+    if _UNDEAD_CARD_IDS is None:
+        ids: set = set(_KNOWN_UNDEAD_CARD_IDS)
+        cards_path = resource_path("json", "cards.json")
+        if cards_path.is_file():
+            try:
+                with open(cards_path, encoding="utf-8") as f:
+                    for card in json.load(f):
+                        cid = card.get("id") or ""
+                        race = card.get("race") or ""
+                        races = card.get("races") or []
+                        if race == "UNDEAD" or "UNDEAD" in races:
+                            ids.add(cid)
+            except (OSError, json.JSONDecodeError, TypeError, ValueError):
+                ids = set(_KNOWN_UNDEAD_CARD_IDS)
+        _UNDEAD_CARD_IDS = ids
+    return card_id in _UNDEAD_CARD_IDS
+
+
+def unit_is_undead(unit: dict) -> bool:
+    """模拟场面 dict 是否为亡灵。"""
+    if unit.get("undead"):
+        return True
+    tags = unit.get("tags") or {}
+    if tags.get("UNDEAD"):
+        return True
+    race = unit.get("cardrace") or _dragon_race_value(tags)
+    if race in ("UNDEAD", 11, "11"):
+        return True
+    return card_id_is_undead(unit.get("card_id") or "")
+
+
 @lru_cache(maxsize=4096)
 def card_id_is_paladin(card_id: str) -> bool:
     """cards.json 牌面职业是否为圣骑士。"""
@@ -393,12 +437,14 @@ CLEAR_TARGETED_POINTED_SPELL_IDS = frozenset({
 SPELL_REQUIRES_ENEMY_MINION = frozenset({
     "TTN_853",  # 审判恶徒
     "CS1_130", "CORE_CS1_130",  # 神圣惩击：只能打随从
+    "ICC_055", "CORE_ICC_055",  # 吸取灵魂：只能打随从
     "REV_369", "CORE_REV_369",  # 间接伤害：须有敌方随从
 })
 
 # 须指定友方随从方可打出
 SPELL_REQUIRES_FRIENDLY_MINION = frozenset({
     "WW_027",  # 可靠陪伴
+    "BE_152t",  # 太阳的祝福（太阳舞者衍生）
     "MAW_021",  # 问心无愧
     "CORE_MAW_021",
     "CORE_BT_292", "BT_292",  # 阿达尔之手（斩杀搜索只对友方）
@@ -408,6 +454,7 @@ SPELL_REQUIRES_FRIENDLY_MINION = frozenset({
     "KAR_077", "CORE_KAR_077", "WON_309",  # 银月城传送门（斩杀只 buff 友方）
     "CAP_801",  # 幽魂不散
     "CATA_306", "CATA_306t1", "CATA_306t2",  # 教派分歧（合体 / 已裂变）
+    "DINO_432",  # 奔行豹面具：指定友方设为 5/4（斩杀只 buff 友方）
 })
 
 # 须指定友方白银之手新兵方可打出
@@ -1127,6 +1174,7 @@ def _summon_friendly_fighter(
     divine_shield: bool = False,
     lifesteal: bool = False,
     windfury: bool = False,
+    undead: bool = False,
     card_id: str = "",
     from_hero_power: bool = False,
     aura: bool = False,
@@ -1134,7 +1182,10 @@ def _summon_friendly_fighter(
     """
     法术当回合召唤随从。
     冲锋：可打脸；突袭：仅可解场；否则召唤失调（本回合不能攻击）。
+    场面已有 7 个存活随从时不召唤。
     """
+    if len(_friendly_minions(fighters)) >= MAX_BOARD_MINIONS:
+        return
     if charge:
         attacks_left, can_face = (2 if windfury else 1), True
     elif rush:
@@ -1158,6 +1209,7 @@ def _summon_friendly_fighter(
         "windfury": windfury,
         "from_hero_power": from_hero_power,
         "aura": aura,
+        "undead": undead or card_id_is_undead(card_id),
     }
     if card_id_is_paladin(card_id):
         unit["paladin"] = True
@@ -1173,10 +1225,37 @@ def _add_temp_hero_attack(
     from_hero_power: bool = False,
     can_face: bool = True,
 ) -> None:
-    """法术/技能当回合给英雄临时攻击力（可打脸、可参与解嘲）。"""
+    """法术/技能当回合给英雄临时攻击力（可打脸、可参与解嘲）。
+
+    与恶魔之爪一致：若已有英雄/武器挥击，并入其攻击（同一次挥击），
+    不另造第二次攻击（否则圣盾等会被拆成多段误判）。
+    """
     atk = max(0, int(attack))
     if atk <= 0:
         return
+    for fighter in fighters:
+        if (
+            fighter.get("kind") in ("hero", "weapon")
+            and fighter.get("attacks_left", 0) > 0
+            and fighter.get("health", 0) > 0
+            and fighter.get("can_face", True)
+        ):
+            fighter["atk"] = int(fighter.get("atk", 0) or 0) + atk
+            if from_hero_power:
+                fighter["from_hero_power"] = True
+            return
+    for fighter in fighters:
+        if (
+            fighter.get("kind") in ("hero", "weapon")
+            and fighter.get("attacks_left", 0) > 0
+            and fighter.get("health", 0) > 0
+        ):
+            fighter["atk"] = int(fighter.get("atk", 0) or 0) + atk
+            if can_face:
+                fighter["can_face"] = True
+            if from_hero_power:
+                fighter["from_hero_power"] = True
+            return
     fighters.append({
         "kind": "hero",
         "atk": atk,
@@ -1185,6 +1264,76 @@ def _add_temp_hero_attack(
         "can_face": can_face,
         "from_hero_power": from_hero_power,
     })
+
+
+# DH 艾萨拉兆示士兵（装甲放血纳迦 / 邪能灌魔 / 巨型触手）
+_AZSHARA_HERALD_SOLDIER_IDS = frozenset({"CATA_525t", "CATA_151t", "CATA_151t1"})
+
+
+def azshara_herald_hero_bonus(
+    gs: Optional["GameState"],
+    player_id: Optional[int],
+) -> int:
+    """下一枚艾萨拉士兵给英雄的当回合攻击加成（1→2→4…）。
+
+    优先读 SETASIDE 预览实体的 TAG_SCRIPT_DATA_NUM_1；否则用 Player 的
+    HERALD_COLOSSAL_AMOUNT（每 2 次兆示升一级，1<<amt//2）。
+    """
+    if gs is not None and player_id is not None:
+        best = 0
+        for ent in gs.entities.values():
+            cid = getattr(ent, "card_id", None) or ""
+            if cid not in _AZSHARA_HERALD_SOLDIER_IDS:
+                continue
+            ctrl = getattr(ent, "controller", None)
+            if ctrl is None:
+                ctrl = (getattr(ent, "tags", None) or {}).get("CONTROLLER")
+            try:
+                if int(ctrl) != int(player_id):
+                    continue
+            except (TypeError, ValueError):
+                continue
+            zone = getattr(ent, "zone", None) or (getattr(ent, "tags", None) or {}).get("ZONE")
+            if str(zone) != "SETASIDE":
+                continue
+            v = int((getattr(ent, "tags", None) or {}).get("TAG_SCRIPT_DATA_NUM_1", 0) or 0)
+            if v > best:
+                best = v
+        if best > 0:
+            return best
+        player_ids = getattr(gs, "player_ids", None) or {}
+        for peid, pid in player_ids.items():
+            if int(pid) != int(player_id):
+                continue
+            pe = gs.entities.get(peid)
+            if pe is None:
+                continue
+            amt = int((pe.tags or {}).get("HERALD_COLOSSAL_AMOUNT", 0) or 0)
+            return max(1, 1 << (amt // 2))
+    return 1
+
+
+def herald_summon_azshara_soldier(
+    fighters: List[dict],
+    *,
+    mult: int = 1,
+    gs: Optional["GameState"] = None,
+    player_id: Optional[int] = None,
+) -> int:
+    """兆示召唤艾萨拉士兵（失调）并给英雄当回合加攻；返回加攻量。"""
+    bonus = azshara_herald_hero_bonus(gs, player_id) * max(int(mult), 1)
+    if bonus <= 0:
+        return 0
+    # 基础 2/1；升级后数值与英雄加攻同倍率（+2→4/2，+4→8/4）
+    _summon_friendly_fighter(
+        fighters,
+        2 * bonus,
+        1 * bonus,
+        rush=False,
+        card_id="CATA_525t",
+    )
+    _add_temp_hero_attack(fighters, bonus)
+    return bonus
 
 
 def _friendly_minion_count(
@@ -1957,6 +2106,8 @@ def _step_counts_as_fire_spell_played(
 # TAG_SCRIPT_DATA_NUM_1 对该 token 不是法术伤害（日志里常为其他脚本数据）
 _SPELL_FIXED_SCRIPT_FACE: Dict[str, int] = {
     "TLC_630t": 2,  # 格里什毒刺虫
+    # 诚信商家格里伏塔护符：日志 SCRIPT_DATA 常写伪劣/真货 dbfId，非伤害
+    "VAC_959t07t": 6,  # 守卫护符（真货，可打脸）
 }
 
 # 裂变牌的 TAG_SCRIPT_DATA_NUM_1 是半张的 dbfId（教派分歧=122876），不是伤害
@@ -1965,6 +2116,10 @@ _SCRIPT_DATA_NOT_DAMAGE = frozenset({
     "CATA_134", "CATA_134t", "CATA_134t2",
     "CATA_479", "CATA_479t", "CATA_479t2",
     "CATA_820", "CATA_820t", "CATA_820t2",
+    # 守卫护符伪劣版：SCRIPT_DATA 为真货 dbfId；效果仅打随从，勿当打脸预估
+    "VAC_959t07",
+    # 吸取灵魂：$3 写在脚本伤害里，但只能打随从，不能当打脸
+    "ICC_055", "CORE_ICC_055",
 })
 
 
@@ -2090,6 +2245,12 @@ _SPELL_SIM_TIER_OVERRIDES: Dict[str, SpellSimTier] = {
     "EDR_461": SpellSimTier.UTILITY,            # 新月仪式
     "EDR_461t": SpellSimTier.UTILITY,           # 满月仪式
     "WW_027": SpellSimTier.UTILITY,             # 可靠陪伴 +2/+3
+    "BE_152t": SpellSimTier.UTILITY,            # 太阳的祝福 +2/+3
+    "TIME_026": SpellSimTier.UTILITY,           # 续连熵能：全体友方 +1/+1
+    "CORE_EDR_002": SpellSimTier.UTILITY,       # 毒性吐息：友方亡灵剧毒
+    "EDR_002": SpellSimTier.UTILITY,
+    # 须先于麦芽岩浆等直伤：放 UTILITY 会固定成先 AOE 后上场，法强加不上
+    "END_031": SpellSimTier.CLEAR_BOARD,
     "BT_292": SpellSimTier.UTILITY,             # 阿达尔之手 +2/+1
     "CORE_BT_292": SpellSimTier.UTILITY,
     "REV_842": SpellSimTier.UTILITY,            # 晋升：白银之手新兵 +3/+3
@@ -2101,6 +2262,10 @@ _SPELL_SIM_TIER_OVERRIDES: Dict[str, SpellSimTier] = {
     "CATA_306": SpellSimTier.UTILITY,           # 教派分歧 +2/+3 并复制
     "CATA_306t1": SpellSimTier.UTILITY,         # 已裂变：只 buff
     "CATA_306t2": SpellSimTier.UTILITY,         # 已裂变：只复制
+    "CATA_479": SpellSimTier.UTILITY,           # 飞龙机动：召唤+全体加攻圣盾
+    "CATA_479t": SpellSimTier.UTILITY,          # 已裂变：只召唤幼龙
+    "CATA_479t2": SpellSimTier.UTILITY,         # 已裂变：只 +1 攻与圣盾
+    "DINO_432": SpellSimTier.UTILITY,           # 奔行豹面具：友方设为 5/4
 
     "ETC_210": SpellSimTier.DIRECT_FACE,        # 通灵最强音（脚本伤害）
     "VAC_427": SpellSimTier.DIRECT_FACE,        # 甜筒殡淇淋 3 直伤
@@ -2132,11 +2297,15 @@ _SPELL_SIM_TIER_OVERRIDES: Dict[str, SpellSimTier] = {
     "JAIL_326": SpellSimTier.UTILITY,           # 审判：复制友方属性到双方其他随从
     "ETC_082": SpellSimTier.UTILITY,            # 绝望哀歌：灵活解场+召唤，非纯打脸前缀
     "EDR_814": SpellSimTier.UTILITY,            # 感染吐息：2 伤+召唤饱胀水蛭（回合结束偷血）
+    "JAIL_454": SpellSimTier.CLEAR_BOARD,        # 紧急手术：4×3/1 吸血亡灵攻击所选敌方随从
     "EDR_874": SpellSimTier.UTILITY,            # 星体平衡：生成月火+星火链，须完整 combo
     "MIS_707": SpellSimTier.UTILITY,            # 批量生产：自伤+抽牌，非打脸
     "JAIL_312": SpellSimTier.UTILITY,           # 私藏魔杖：生成奥术飞弹，须 combo 模拟
     "JAIL_941": SpellSimTier.UTILITY,           # 神圣之拥：治疗+生成黑暗之拥，须 combo
     "JAIL_941t": SpellSimTier.DIRECT_FACE,      # 黑暗之拥：4 直伤（可打脸）
+    "MEND_500": SpellSimTier.CLEAR_AND_FACE,    # 迸发魔网：随机随从溢出打脸
+    "CATA_530": SpellSimTier.UTILITY,           # 邪能灌魔：兆示士兵英雄加攻+吸血
+    "EDR_263": SpellSimTier.CLEAR_AND_FACE,     # 巨狼的恩赐：4 脸或两突袭狼
     # 净场须与「拦住他们！」等 buff 同层，才能枚举「先 buff 抬攻再净场」；
     # 若留在 CLEAR_BOARD，分层会固定成先净场（连 6 攻仙鹤一起清掉）后 buff
     "REV_252": SpellSimTier.UTILITY,
@@ -2160,7 +2329,10 @@ def _infer_spell_sim_tier(defn: BoardSpellDef) -> SpellSimTier:
         board_t, board_f, mult=1, enemy_shield=False, rng=tier_rng,
     )
     alive = sum(1 for t in board_t if t.get("health", 0) > 0)
-    minion_hit = alive < len(taunts)
+    # 未击杀也可能造成随从伤害（如麦芽岩浆 1 伤打 2 血嘲讽）
+    minion_hit = alive < len(taunts) or any(
+        int(t.get("health", 0) or 0) < 2 for t in board_t
+    )
     face_board = int(res_board.direct_face_damage or 0)
     res_empty = defn.apply([], [], mult=1, enemy_shield=False, rng=tier_rng)
     face_empty = int(res_empty.direct_face_damage or 0)
@@ -2246,9 +2418,44 @@ def estimate_no_taunt_direct_face_damage(
             card=card, gs=gs, player_id=player_id,
             spell_power=spell_power,
         )
-        return max(0, int(res.direct_face_damage or 0))
+        face = max(0, int(res.direct_face_damage or 0))
+        cid = (card.card_id if card and card.card_id else "") or (
+            defn.card_ids[0] if defn.card_ids else ""
+        )
+        # 连喝：单次 apply 只有一杯；估伤按剩余杯数放大（法力由 pack/序列另计）
+        if face > 0 and cid in DRINK_SPELL_IDS:
+            cups = max(1, int(DRINKS_LEFT.get(cid, 1) or 1))
+            return face * cups
+        return face
     except Exception:
         return 0
+
+
+def spell_mutates_fighters_aside_from_face(
+    defn: BoardSpellDef,
+    card: Optional["Entity"] = None,
+) -> bool:
+    """法术除直伤外是否改 fighters（英雄攻/召唤/解场等）。
+
+    发挥优势等「1伤+英雄攻」若进无嘲讽直伤前缀，只会留下 1 点直伤，
+    英雄攻被剥离，导致打出前漏斩、打出后才亮。
+    """
+    probe = [{
+        "kind": "weapon",
+        "atk": 1,
+        "health": 30,
+        "attacks_left": 1,
+        "durability": 1,
+        "can_face": True,
+    }]
+    before = deepcopy(probe)
+    try:
+        defn.apply(
+            [], probe, mult=1, enemy_shield=False, card=card, spell_power=0,
+        )
+    except Exception:
+        return False
+    return probe != before
 
 
 def partition_hand_spells_by_tier(
@@ -2272,10 +2479,19 @@ def partition_hand_spells_by_tier(
         if get_combo_def(card.card_id or ""):
             combo.append(item)
             continue
+        cid = card.card_id or ""
+        # 麦芽岩浆等连喝：单次 apply 只结算 1 杯；须走 combo 让序列展开整链
+        if cid in DRINK_SPELL_IDS:
+            combo.append(item)
+            continue
         # 随机直伤（奥术飞弹等）不可进「固定打脸前缀」：单次 RNG 估值会被当成必中，
         # 且前缀会从 MC 中剥离，导致对面有随从时误报确定斩杀。
         if spell_sim_tier(defn) == SpellSimTier.DIRECT_FACE and not defn.uses_random:
-            direct.append(item)
+            # 发挥优势等：直伤之外还有英雄攻/召唤，必须走 combo 全量 apply
+            if spell_mutates_fighters_aside_from_face(defn, card):
+                combo.append(item)
+            else:
+                direct.append(item)
         else:
             combo.append(item)
     return combo, direct
@@ -2454,6 +2670,7 @@ def _unique_bucket_perms_by_outcome(
     gs: Optional["GameState"] = None,
     player_id: Optional[int] = None,
     next_turn_preview: bool = False,
+    mana_budget: Optional[int] = None,
 ) -> List[List[SpellPlayStep]]:
     """
     同一优先级层内：若多种排列打出后场面终态相同，只保留一条代表序列。
@@ -2470,6 +2687,7 @@ def _unique_bucket_perms_by_outcome(
             t2, f2, perm, spell_mult=spell_mult, enemy_shield=enemy_shield,
             gs=gs, player_id=player_id,
             next_turn_preview=next_turn_preview,
+            mana_budget=mana_budget,
         )
         fp = spell_sequence_transposition_key(
             t2, f2, res, hero_hp=None, mana_left=None,
@@ -2490,16 +2708,22 @@ def enumerate_pruned_tiered_spell_orders(
     gs: Optional["GameState"] = None,
     player_id: Optional[int] = None,
     next_turn_preview: bool = False,
+    outcome_cache: Optional[Dict[tuple, dict]] = None,
+    mana_budget: Optional[int] = None,
 ) -> List[List[SpellPlayStep]]:
     """
     分层枚举 + 场面置换剪枝：每层内合并终态等价的排列；
     层与层之间按 清场 -> 清场+打脸 -> 直伤 -> 功能 顺序连接。
+    outcome_cache：可选，写入完整序列终态快照供主循环 spell_first 复用。
+    mana_budget：须与主循环一致，否则星体平衡等衍生牌会按无限法力入缓存。
     """
     return _enumerate_pruned_tiered_dfs(
         items, taunts, fighters,
         spell_mult=spell_mult, enemy_shield=enemy_shield,
         gs=gs, player_id=player_id,
         next_turn_preview=next_turn_preview,
+        outcome_cache=outcome_cache,
+        mana_budget=mana_budget,
     )
 
 
@@ -2513,38 +2737,62 @@ def _enumerate_pruned_tiered_dfs(
     gs: Optional["GameState"] = None,
     player_id: Optional[int] = None,
     next_turn_preview: bool = False,
+    outcome_cache: Optional[Dict[tuple, dict]] = None,
+    mana_budget: Optional[int] = None,
 ) -> List[List[SpellPlayStep]]:
     buckets = list(split_sequence_by_sim_tier(items))
     out: List[List[SpellPlayStep]] = []
     seen_seq: set = set()
 
-    def dfs(prefix: List[SpellPlayStep], bucket_idx: int, t: List[dict], f: List[dict]) -> None:
+    def dfs(
+        prefix: List[SpellPlayStep],
+        bucket_idx: int,
+        t: List[dict],
+        f: List[dict],
+        acc: SpellApplyResult,
+        mana_left: Optional[int],
+    ) -> None:
         if bucket_idx >= len(buckets):
             key = tuple((d, c, card.entity_id if card else None) for d, c, card in prefix)
             if key not in seen_seq:
                 seen_seq.add(key)
                 out.append(prefix)
+                if outcome_cache is not None and prefix:
+                    outcome_cache[key] = {
+                        "enemy": deepcopy(t),
+                        "fighters": deepcopy(f),
+                        "spell_res": deepcopy(acc),
+                        "mana_left": mana_left,
+                        "fp": spell_sequence_transposition_key(
+                            t, f, acc, hero_hp=None, mana_left=mana_left,
+                        ),
+                    }
             return
         bucket = buckets[bucket_idx]
         if not bucket:
-            dfs(prefix, bucket_idx + 1, t, f)
+            dfs(prefix, bucket_idx + 1, t, f, acc, mana_left)
             return
         for perm in _unique_bucket_perms_by_outcome(
             bucket, t, f,
             spell_mult=spell_mult, enemy_shield=enemy_shield,
             gs=gs, player_id=player_id,
             next_turn_preview=next_turn_preview,
+            mana_budget=mana_left,
         ):
             t2 = deepcopy(t)
             f2 = deepcopy(f)
-            apply_spell_sequence(
+            res, _hp, mana_after = apply_spell_sequence_with_meta(
                 t2, f2, perm, spell_mult=spell_mult, enemy_shield=enemy_shield,
                 gs=gs, player_id=player_id,
                 next_turn_preview=next_turn_preview,
+                mana_budget=mana_left,
             )
-            dfs(prefix + perm, bucket_idx + 1, t2, f2)
+            dfs(
+                prefix + perm, bucket_idx + 1, t2, f2,
+                merge_spell_apply_results(acc, res), mana_after,
+            )
 
-    dfs([], 0, taunts, fighters)
+    dfs([], 0, taunts, fighters, SpellApplyResult(), mana_budget)
     return out
 
 
@@ -2737,7 +2985,7 @@ DRINK_NEXT = {
 }
 # 饮品各杯实际费用（首杯/回手衍生牌可能不同；未列出的沿用当步 cost）
 DRINK_SPELL_COST: Dict[str, int] = {
-    "VAC_323": 1,
+    "VAC_323": 2,
     "VAC_323t": 2,
     "VAC_323t1": 2,
     "VAC_323t2": 2,
@@ -3228,7 +3476,9 @@ def hand_board_spells(
         if not arcane_flow_hand_playable(card):
             continue
         # 已裂变半张须带 SHATTERED=1；SETASIDE 预览 token 不能当手牌打出
-        if (card.card_id or "") in ("CATA_306t1", "CATA_306t2"):
+        if (card.card_id or "") in (
+            "CATA_306t1", "CATA_306t2", "CATA_479t", "CATA_479t2",
+        ):
             if int((card.tags or {}).get("SHATTERED", 0) or 0) != 1:
                 continue
         defn = resolve_board_spell_def(card, gs, player_id)
@@ -3334,6 +3584,7 @@ def enumerate_spell_sequences(
     gs: Optional["GameState"] = None,
     player_id: Optional[int] = None,
     next_turn_preview: bool = False,
+    outcome_cache: Optional[Dict[tuple, dict]] = None,
 ) -> List[List[SpellPlayStep]]:
     """
     枚举手牌解场法术的可行打出顺序（含子集：可只打其中几张，如两张月亮井）。
@@ -3341,6 +3592,7 @@ def enumerate_spell_sequences(
     max_combo_len：单条 combo 最多几张（默认 MAX_SPELL_COMBO_LEN=6；None=不限制）。
     mana_budget 剪枝总费用；max_sequences 为 None 时不提前截断。
     提供 enemy_minions/fighters 时：按分层 + 场面终态置换剪枝（同终态只留一条序列）。
+    outcome_cache：可选，分层剪枝时写入终态快照。
     """
     if not spells:
         return [[]]
@@ -3377,6 +3629,8 @@ def enumerate_spell_sequences(
                 spell_mult=spell_mult, enemy_shield=enemy_shield,
                 gs=gs, player_id=player_id,
                 next_turn_preview=next_turn_preview,
+                outcome_cache=outcome_cache,
+                mana_budget=mana_budget,
             )
         else:
             order_list = enumerate_tiered_spell_orders(items)
@@ -3490,6 +3744,7 @@ def _apply_spell_sequence_impl(
     )
     tyrande_double_remaining = tyrande_double_spells_remaining(gs, player_id)
     shattered_arcane_flow_entities: set = set()
+    spent_hand_ids: set = set()
     fire_spell_played_this_turn = False
     dragon_played = False
     from .damaged_spell_power import sim_spell_power, try_inline_mage_fireblast_setup
@@ -3582,11 +3837,14 @@ def _apply_spell_sequence_impl(
                     finale_active=finale_active,
                     hero_damaged_this_turn=hero_damaged_this_turn,
                     friendly_minion_died_this_turn=friendly_minion_died,
+                    spent_hand_ids=spent_hand_ids,
                 )
                 res = _coerce_spell_apply_result(res)
                 _merge_step_result(total, res, defn, current_card)
                 if res.broke_enemy_hero_shield:
                     enemy_shield = False
+                if played_eid is not None:
+                    spent_hand_ids.add(played_eid)
                 if not friendly_minion_died and _minion_died_in_wave(
                     _friendly_minions(fighters), friendly_before,
                 ):

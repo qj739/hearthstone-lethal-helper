@@ -22,6 +22,7 @@ BOARD_END_TURN_HAND: Dict[str, BoardSpellDef] = {}
 HAND_END_TURN_PLAY_IDS = frozenset({
     "EDR_453",   # 棘嗣幼龙（溢出随机）
     "RLK_720",   # 侏儒嚼嚼怪（打最低生命敌人）
+    "DEEP_999t2",  # 深岩之洲晶簇：回合结束全体敌人 2
 })
 
 
@@ -121,5 +122,11 @@ _register_hand_end_turn(BoardSpellDef(
     ("RLK_720", "CORE_RLK_720"),
     6,
     "侏儒嚼嚼怪",
+    _apply_play_end_turn_minion,
+))
+_register_hand_end_turn(BoardSpellDef(
+    ("DEEP_999t2",),
+    2,
+    "深岩之洲晶簇",
     _apply_play_end_turn_minion,
 ))

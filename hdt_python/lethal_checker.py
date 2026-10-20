@@ -2,8 +2,10 @@
 
 import random
 import time
+from copy import deepcopy
+from dataclasses import dataclass, field
 from itertools import combinations
-from typing import List, Tuple, Optional, Set
+from typing import Any, Dict, List, Tuple, Optional, Set
 from .power_parser import GameState
 from .board_damage import (
     build_player_board,
@@ -74,12 +76,26 @@ from .end_turn_board import (
 
 # Overlay 随机线路：搜索与展示 MC 共用试验次数；每次试验独立种子
 OVERLAY_MC_TRIALS = 50
+# 预算尾段（距 deadline < 该秒数）时随机线 trials 降级
+MC_SOFT_DEGRADE_REMAINING_SEC = 3.0
+MC_SOFT_DEGRADE_TRIALS = 5
 # 随机斩杀提示/高亮最低概率（低于此值不提示斩杀）
 MIN_LETHAL_PROMPT_PROB = 0.2
 
 
 def _mc_rng(trial_index: int) -> random.Random:
     return random.Random(trial_index * 9973 + 101)
+
+
+@dataclass
+class McLineStats:
+    """单次 MC 线路统计：供搜索 max / 打分 mean / Overlay stats 复用。"""
+    mean: float
+    max_face: int
+    lethal_hits: int
+    trials: int
+    best_outcome: Tuple[int, ...]
+    top_outcomes: List[Tuple[int, float]] = field(default_factory=list)
 
 
 def _clone_combat_state(d: dict) -> dict:
@@ -209,6 +225,9 @@ class LethalChecker:
         self._lethal_deadline: Optional[float] = None
         self._lethal_budget_depth: int = 0
         self._lethal_timed_out: bool = False
+        self._mc_cache: Dict[tuple, McLineStats] = {}
+        self._mc_run_count: int = 0  # 测试用：实际跑 MC 循环次数
+        self._enum_apply_cache: Dict[tuple, Dict[str, Any]] = {}
 
     def lethal_calc_timed_out(self) -> bool:
         """最近一次斩杀/场攻计算是否因超时而中止。"""
@@ -218,6 +237,9 @@ class LethalChecker:
         if self._lethal_budget_depth == 0:
             self._lethal_timed_out = False
             self._lethal_deadline = time.perf_counter() + LETHAL_CALC_TIMEOUT_SEC
+            self._mc_cache = {}
+            self._mc_run_count = 0
+            self._enum_apply_cache = {}
         self._lethal_budget_depth += 1
 
     def _end_lethal_budget(self) -> None:
@@ -234,6 +256,18 @@ class LethalChecker:
             self._lethal_timed_out = True
             return True
         return False
+
+    def _lethal_budget_remaining(self) -> Optional[float]:
+        if self._lethal_deadline is None:
+            return None
+        return self._lethal_deadline - time.perf_counter()
+
+    def _mc_trials_for_budget(self, default: int = OVERLAY_MC_TRIALS) -> int:
+        """预算尾段降低随机线 trials，避免直接 break 丢掉高潜力长 combo。"""
+        remaining = self._lethal_budget_remaining()
+        if remaining is not None and remaining < MC_SOFT_DEGRADE_REMAINING_SEC:
+            return min(default, MC_SOFT_DEGRADE_TRIALS)
+        return default
 
     def is_local_turn(self) -> bool:
         pid = self.game_state.local_player_id
@@ -619,6 +653,8 @@ class LethalChecker:
             has_lethal = face >= lethal_hp
         # 对手仍有嘲讽且纯场面（无模拟清嘲）不足以斩杀 → 抑制误报。
         # 法术/英雄技能等可指定打脸的直伤可穿嘲讽，须一并计入。
+        # 回合结束打脸（如侏儒嚼嚼怪打最低生命敌人）已由 end_turn 模拟确认能打到脸，
+        # 但不并入 minion_board 分项，须用 total−已归因分量还原后计入穿透。
         if has_lethal and not uses_random:
             opp = self.game_state.opponent_player_id
             if opp is not None:
@@ -638,6 +674,8 @@ class LethalChecker:
                         + max(0, getattr(self, "_overlay_battlecry_face", 0))
                         + max(0, getattr(self, "_overlay_fatigue_face", 0))
                     )
+                    attributed = board_from_spells + pierce_face
+                    pierce_face += max(0, int(face) - attributed)
                     if (
                         board_from_spells <= 0
                         and pure < lethal_hp
@@ -1832,14 +1870,9 @@ class LethalChecker:
                 total, minion_board, weapon_board, spell_face, hp_board, hero_buff_board,
             )
         our_board = self.game_state.get_board(local)
-        # 随机回合结束：确定性模拟（rng=None）不在此乐观加脸，交给 MC
-        if rng is None and (
-            end_turn_uses_random(our_board)
-            or end_turn_uses_random_fighters(fighters)
-        ):
-            return (
-                total, minion_board, weapon_board, spell_face, hp_board, hero_buff_board,
-            )
+        # 随机回合结束：rng=None 时仍用乐观溢出打分（如棘嗣幼龙 atk−最低血随从），
+        # 否则 CAP_801 等只抬高溢出攻的法术在搜索里会被当成 0 伤丢掉。
+        # 最终斩杀提示仍走 MC 概率门闩（MIN_LETHAL_PROMPT_PROB）。
         extra = sim_end_turn_entities_from_fighters(fighters)
         eff_hp = self._lethal_search_threshold_hp()
         hero_hp_after = max(0, eff_hp - max(0, int(total)))
@@ -2294,7 +2327,7 @@ class LethalChecker:
             opp_hp_for_spell = self._opponent_hero_hp_after_face_damage(
                 defender_shield, board_face,
             )
-            spell_res, hp_end, _ = apply_spell_sequence_with_meta(
+            spell_res, hp_end, mana_after_spells = apply_spell_sequence_with_meta(
                 enemy, fs, seq, spell_mult=spell_mult,
                 enemy_shield=atk_shield, rng=rng,
                 gs=self.game_state, player_id=self.game_state.local_player_id,
@@ -2303,7 +2336,7 @@ class LethalChecker:
                 next_turn_preview=self._hero_power_next_turn(),
             )
             mana_after_refresh, refresh_direct = self._reapply_hero_powers_after_refresh(
-                fs, available_mana, defender_shield=atk_shield, enemy=enemy,
+                fs, mana_after_spells, defender_shield=atk_shield, enemy=enemy,
                 refresh_count=int(getattr(spell_res, "refresh_hero_powers", 0) or 0),
             )
             if refresh_direct:
@@ -2465,12 +2498,13 @@ class LethalChecker:
         available_mana: Optional[int] = None,
         hand_charges: Optional[List] = None,
         extra_spell_face: int = 0,
+        hp_direct: int = 0,
     ) -> Tuple[int, int, int]:
         outcome = self._simulate_line_outcome(
             base_enemy_minions, fighters, seq, order,
             spell_mult=spell_mult, defender_shield=defender_shield, rng=rng,
             available_mana=available_mana, hand_charges=hand_charges,
-            extra_spell_face=extra_spell_face,
+            extra_spell_face=extra_spell_face, hp_direct=hp_direct,
         )
         total, _, _, _, _, _, ls, armor, _ = self._unpack_face_outcome(outcome)
         return total, ls, armor
@@ -2481,6 +2515,176 @@ class LethalChecker:
             return []
         ranked = sorted(counts.keys(), reverse=True)
         return [(dmg, counts[dmg] / trials) for dmg in ranked[:2]]
+
+    @staticmethod
+    def _mc_seq_entity_key(seq: List) -> tuple:
+        return tuple(
+            (getattr(card, "entity_id", None), getattr(defn, "name", None), cost)
+            for defn, cost, card in seq
+        )
+
+    @staticmethod
+    def _mc_fighters_key(fighters: List[dict]) -> tuple:
+        return tuple(
+            (
+                f.get("entity_id"),
+                f.get("kind"),
+                int(f.get("atk", 0) or 0),
+                int(f.get("attacks_left", 0) or 0),
+                int(f.get("health", 0) or 0),
+                bool(f.get("can_face", True)),
+                bool(f.get("rush", False)),
+            )
+            for f in fighters
+        )
+
+    def _mc_cache_key(
+        self,
+        seq: List,
+        order: str,
+        *,
+        spell_mult: int,
+        defender_shield: bool,
+        available_mana: Optional[int],
+        hp_direct: int,
+        extra_spell_face: int,
+        fighters: List[dict],
+        trials: int,
+    ) -> tuple:
+        return (
+            order,
+            self._mc_seq_entity_key(seq),
+            spell_mult,
+            bool(defender_shield),
+            available_mana,
+            int(hp_direct or 0),
+            int(extra_spell_face or 0),
+            self._mc_fighters_key(fighters),
+            int(trials),
+        )
+
+    def _run_mc_line_stats(
+        self,
+        base_enemy_minions: List[dict],
+        fighters: List[dict],
+        seq: List,
+        order: str,
+        *,
+        spell_mult: int,
+        defender_shield: bool,
+        trials: int = OVERLAY_MC_TRIALS,
+        available_mana: Optional[int] = None,
+        hand_charges: Optional[List] = None,
+        hp_direct: int = 0,
+        extra_spell_face: int = 0,
+        ignore_budget: bool = False,
+        use_cache: bool = True,
+    ) -> McLineStats:
+        """单次 MC：同时累计 mean / max / lethal / top / best_outcome；可缓存。"""
+        key = self._mc_cache_key(
+            seq, order,
+            spell_mult=spell_mult, defender_shield=defender_shield,
+            available_mana=available_mana, hp_direct=hp_direct,
+            extra_spell_face=extra_spell_face, fighters=fighters, trials=trials,
+        )
+        if use_cache and key in self._mc_cache:
+            return self._mc_cache[key]
+
+        self._mc_run_count += 1
+        _, _, static_hp = self.get_opponent_health()
+        counts: dict = {}
+        lethal_hits = 0
+        face_sum = 0.0
+        best_outcome: Tuple[int, ...] = (0, 0, 0, 0, 0, 0, 0, 0, 0)
+        actual = 0
+
+        det_seq, rand_seq = split_deterministic_random_sequence(seq)
+        hero_hp = self._my_hero_hp_for_spells()
+        local_id = self.game_state.local_player_id
+        use_det_rand_mc = (
+            order == "spell_first"
+            and bool(rand_seq)
+            and sequence_random_spells_all_last(seq)
+            and not end_turn_uses_random_fighters(fighters)
+            and (
+                local_id is None
+                or not end_turn_uses_random(self.game_state.get_board(local_id))
+            )
+        )
+
+        for i in range(trials):
+            if not ignore_budget and self._lethal_budget_expired():
+                break
+            if use_det_rand_mc:
+                enemy = _clone_combat_states(base_enemy_minions)
+                fs = _clone_combat_states(fighters)
+                sacrificed = self._sacrifice_charger_for_boneblade(enemy, fs, seq)
+                spell_parts: List[SpellApplyResult] = []
+                mana_end = available_mana
+                hero_end = hero_hp
+                if det_seq:
+                    det_res, hero_end, mana_end = apply_spell_sequence_with_meta(
+                        enemy, fs, det_seq, spell_mult=spell_mult,
+                        enemy_shield=defender_shield, rng=None,
+                        gs=self.game_state, player_id=local_id,
+                        hero_hp=hero_end, mana_budget=mana_end,
+                        next_turn_preview=self._hero_power_next_turn(),
+                        assume_friendly_minion_died=sacrificed,
+                    )
+                    spell_parts.append(det_res)
+                rand_res, hero_end, mana_end = apply_spell_sequence_with_meta(
+                    enemy, fs, rand_seq, spell_mult=spell_mult,
+                    enemy_shield=defender_shield, rng=_mc_rng(i),
+                    gs=self.game_state, player_id=local_id,
+                    hero_hp=hero_end, mana_budget=mana_end,
+                    next_turn_preview=self._hero_power_next_turn(),
+                    assume_friendly_minion_died=sacrificed,
+                )
+                spell_parts.append(rand_res)
+                spell_res = merge_spell_apply_results(*spell_parts)
+                if extra_spell_face:
+                    spell_res.direct_face_damage += extra_spell_face
+                outcome = self._spell_first_face_from_state(
+                    enemy, fs, spell_res, mana_end, hand_charges or [],
+                    defender_shield, hp_direct, rng=_mc_rng(i),
+                    hero_hp_after_spells=hero_end,
+                )
+            else:
+                outcome = self._simulate_line_outcome(
+                    base_enemy_minions, fighters, seq, order,
+                    spell_mult=spell_mult, defender_shield=defender_shield,
+                    rng=_mc_rng(i), available_mana=available_mana,
+                    hand_charges=hand_charges, hp_direct=hp_direct,
+                    extra_spell_face=extra_spell_face,
+                )
+            total, _, _, _, _, _, line_ls, line_armor, _ = (
+                self._unpack_face_outcome(outcome)
+            )
+            counts[total] = counts.get(total, 0) + 1
+            face_sum += total
+            actual += 1
+            if total >= static_hp + line_ls + line_armor:
+                lethal_hits += 1
+            if total > best_outcome[0]:
+                best_outcome = outcome
+
+        if actual <= 0:
+            stats = McLineStats(
+                mean=0.0, max_face=0, lethal_hits=0, trials=0,
+                best_outcome=best_outcome, top_outcomes=[],
+            )
+        else:
+            stats = McLineStats(
+                mean=face_sum / actual,
+                max_face=max(counts.keys()),
+                lethal_hits=lethal_hits,
+                trials=actual,
+                best_outcome=best_outcome,
+                top_outcomes=self._top_two_damage_outcomes(counts, actual),
+            )
+        if use_cache:
+            self._mc_cache[key] = stats
+        return stats
 
     def _mc_mean_line_face_total(
         self,
@@ -2494,17 +2698,17 @@ class LethalChecker:
         trials: int = OVERLAY_MC_TRIALS,
         available_mana: Optional[int] = None,
         hand_charges: Optional[List] = None,
+        hp_direct: int = 0,
+        extra_spell_face: int = 0,
     ) -> float:
-        total = 0.0
-        for i in range(trials):
-            face, _, _ = self._simulate_line_face_total(
-                base_enemy_minions, fighters, seq, order,
-                spell_mult=spell_mult, defender_shield=defender_shield,
-                rng=_mc_rng(i),
-                available_mana=available_mana, hand_charges=hand_charges,
-            )
-            total += face
-        return total / trials
+        stats = self._run_mc_line_stats(
+            base_enemy_minions, fighters, seq, order,
+            spell_mult=spell_mult, defender_shield=defender_shield,
+            trials=trials, available_mana=available_mana,
+            hand_charges=hand_charges, hp_direct=hp_direct,
+            extra_spell_face=extra_spell_face,
+        )
+        return stats.mean
 
     def _sequence_sim_needs_mc(self, seq: List, fighters: List[dict]) -> bool:
         """仅序列/攻击随机性需要 MC；场面随机回合结束不影响确定法术线打分。"""
@@ -2605,6 +2809,9 @@ class LethalChecker:
         best_rand = self._line_needs_random(best_seq, fighters) if best_seq else False
         if cand_rand != best_rand:
             return not cand_rand
+        # 同分：更短序列优先（避免空场麦迪文的胜利等误伤牌抢展示）
+        if len(seq) != len(best_seq):
+            return len(seq) < len(best_seq)
         return order == "attack_interleaved" and best_order != "attack_interleaved"
 
     def _simulate_random_line_mc_best(
@@ -2621,75 +2828,23 @@ class LethalChecker:
         hp_direct: int,
         trials: int = OVERLAY_MC_TRIALS,
         extra_spell_face: int = 0,
-    ) -> Tuple[str, Tuple[int, int, int, int, int, int]]:
-        """随机法术线路：确定性法术先打完，再对随机后缀做 MC。"""
-        best_order = orders[0]
-        best_outcome = (0, 0, 0, 0, 0, 0)
-        det_seq, rand_seq = split_deterministic_random_sequence(seq)
-        hero_hp = self._my_hero_hp_for_spells()
-        local_id = self.game_state.local_player_id
-
+    ) -> Tuple[str, Tuple[int, ...]]:
+        """随机法术线路：对各 order 跑统一 MC，取 max_face 最优 outcome。"""
+        best_order = orders[0] if orders else "spell_first"
+        best_outcome: Tuple[int, ...] = (0, 0, 0, 0, 0, 0, 0, 0, 0)
         for order in orders:
-            if (
-                order == "spell_first"
-                and rand_seq
-                and sequence_random_spells_all_last(seq)
-                and not end_turn_uses_random_fighters(fighters)
-            ):
-                for i in range(trials):
-                    if self._lethal_budget_expired():
-                        break
-                    enemy = _clone_combat_states(base_enemy_minions)
-                    fs = _clone_combat_states(fighters)
-                    sacrificed = self._sacrifice_charger_for_boneblade(enemy, fs, seq)
-                    spell_parts: List[SpellApplyResult] = []
-                    mana_end = available_mana
-                    hero_end = hero_hp
-                    if det_seq:
-                        det_res, hero_end, mana_end = apply_spell_sequence_with_meta(
-                            enemy, fs, det_seq, spell_mult=spell_mult,
-                            enemy_shield=defender_shield, rng=None,
-                            gs=self.game_state, player_id=local_id,
-                            hero_hp=hero_end, mana_budget=mana_end,
-                            next_turn_preview=self._hero_power_next_turn(),
-                            assume_friendly_minion_died=sacrificed,
-                        )
-                        spell_parts.append(det_res)
-                    rand_res, hero_end, mana_end = apply_spell_sequence_with_meta(
-                        enemy, fs, rand_seq, spell_mult=spell_mult,
-                        enemy_shield=defender_shield, rng=_mc_rng(i),
-                        gs=self.game_state, player_id=local_id,
-                        hero_hp=hero_end, mana_budget=mana_end,
-                        next_turn_preview=self._hero_power_next_turn(),
-                        assume_friendly_minion_died=sacrificed,
-                    )
-                    spell_parts.append(rand_res)
-                    spell_res = merge_spell_apply_results(*spell_parts)
-                    if extra_spell_face:
-                        spell_res.direct_face_damage += extra_spell_face
-                    outcome = self._spell_first_face_from_state(
-                        enemy, fs, spell_res, mana_end, hand_charges,
-                        defender_shield, hp_direct, rng=_mc_rng(i),
-                        hero_hp_after_spells=hero_end,
-                    )
-                    if outcome[0] > best_outcome[0]:
-                        best_outcome = outcome
-                        best_order = order
-                continue
-
-            for i in range(trials):
-                if self._lethal_budget_expired():
-                    break
-                outcome = self._simulate_line_outcome(
-                    base_enemy_minions, fighters, seq, order,
-                    spell_mult=spell_mult, defender_shield=defender_shield,
-                    rng=_mc_rng(i), available_mana=available_mana,
-                    hand_charges=hand_charges, hp_direct=hp_direct,
-                    extra_spell_face=extra_spell_face,
-                )
-                if outcome[0] > best_outcome[0]:
-                    best_outcome = outcome
-                    best_order = order
+            if self._lethal_budget_expired():
+                break
+            stats = self._run_mc_line_stats(
+                base_enemy_minions, fighters, seq, order,
+                spell_mult=spell_mult, defender_shield=defender_shield,
+                trials=trials, available_mana=available_mana,
+                hand_charges=hand_charges, hp_direct=hp_direct,
+                extra_spell_face=extra_spell_face,
+            )
+            if stats.best_outcome[0] > best_outcome[0]:
+                best_outcome = stats.best_outcome
+                best_order = order
         return best_order, best_outcome
 
     def _monte_carlo_line_stats(
@@ -2706,8 +2861,10 @@ class LethalChecker:
         available_mana: Optional[int] = None,
         hand_charges: Optional[List] = None,
         ignore_budget: bool = False,
+        hp_direct: int = 0,
     ) -> Tuple[int, float, List[Tuple[int, float]]]:
         """返回 (样本最高总打脸, P(总打脸 >= 有效血量), 按伤害降序前两种结果及概率)。"""
+        del effective_hp  # 斩杀判定用 static_hp+吸血/加甲（与历史行为一致）
         extra_spell_face = int(getattr(self, "_overlay_direct_face", 0) or 0)
         _, _, static_hp = self.get_opponent_health()
         needs_random = self._line_needs_random(seq, fighters)
@@ -2716,85 +2873,23 @@ class LethalChecker:
                 base_enemy_minions, fighters, seq, order,
                 spell_mult=spell_mult, defender_shield=defender_shield,
                 available_mana=available_mana, hand_charges=hand_charges,
-                extra_spell_face=extra_spell_face,
+                extra_spell_face=extra_spell_face, hp_direct=hp_direct,
             )
             line_eff = static_hp + line_ls + line_armor
             prob = 1.0 if total >= line_eff else 0.0
             top = [(total, 1.0)] if total > 0 else []
             return total, prob, top
 
-        counts: dict = {}
-        lethal_hits = 0
-        det_seq, rand_seq = split_deterministic_random_sequence(seq)
-        hero_hp = self._my_hero_hp_for_spells()
-        local_id = self.game_state.local_player_id
-        use_det_rand_mc = (
-            order == "spell_first"
-            and rand_seq
-            and sequence_random_spells_all_last(seq)
-            and not end_turn_uses_random_fighters(fighters)
-            and (
-                local_id is None
-                or not end_turn_uses_random(self.game_state.get_board(local_id))
-            )
+        stats = self._run_mc_line_stats(
+            base_enemy_minions, fighters, seq, order,
+            spell_mult=spell_mult, defender_shield=defender_shield,
+            trials=trials, available_mana=available_mana,
+            hand_charges=hand_charges, hp_direct=hp_direct,
+            extra_spell_face=extra_spell_face, ignore_budget=ignore_budget,
         )
-        for i in range(trials):
-            if not ignore_budget and self._lethal_budget_expired():
-                break
-            if use_det_rand_mc:
-                enemy = _clone_combat_states(base_enemy_minions)
-                fs = _clone_combat_states(fighters)
-                sacrificed = self._sacrifice_charger_for_boneblade(enemy, fs, seq)
-                spell_parts: List[SpellApplyResult] = []
-                mana_end = available_mana
-                hero_end = hero_hp
-                if det_seq:
-                    det_res, hero_end, mana_end = apply_spell_sequence_with_meta(
-                        enemy, fs, det_seq, spell_mult=spell_mult,
-                        enemy_shield=defender_shield, rng=None,
-                        gs=self.game_state, player_id=local_id,
-                        hero_hp=hero_end, mana_budget=mana_end,
-                        next_turn_preview=self._hero_power_next_turn(),
-                        assume_friendly_minion_died=sacrificed,
-                    )
-                    spell_parts.append(det_res)
-                rand_res, hero_end, mana_end = apply_spell_sequence_with_meta(
-                    enemy, fs, rand_seq, spell_mult=spell_mult,
-                    enemy_shield=defender_shield, rng=_mc_rng(i),
-                    gs=self.game_state, player_id=local_id,
-                    hero_hp=hero_end, mana_budget=mana_end,
-                    next_turn_preview=self._hero_power_next_turn(),
-                    assume_friendly_minion_died=sacrificed,
-                )
-                spell_parts.append(rand_res)
-                spell_res = merge_spell_apply_results(*spell_parts)
-                if extra_spell_face:
-                    spell_res.direct_face_damage += extra_spell_face
-                outcome = self._spell_first_face_from_state(
-                    enemy, fs, spell_res, mana_end, hand_charges or [],
-                    defender_shield, 0, rng=_mc_rng(i),
-                    hero_hp_after_spells=hero_end,
-                )
-                total, _, _, _, _, _, line_ls, line_armor, _ = (
-                    self._unpack_face_outcome(outcome)
-                )
-            else:
-                total, line_ls, line_armor = self._simulate_line_face_total(
-                    base_enemy_minions, fighters, seq, order,
-                    spell_mult=spell_mult, defender_shield=defender_shield,
-                    rng=_mc_rng(i),
-                    available_mana=available_mana, hand_charges=hand_charges,
-                    extra_spell_face=extra_spell_face,
-                )
-            counts[total] = counts.get(total, 0) + 1
-            if total >= static_hp + line_ls + line_armor:
-                lethal_hits += 1
-        if not counts:
+        if stats.trials <= 0:
             return 0, 0.0, []
-        actual_trials = sum(counts.values())
-        peak = max(counts.keys())
-        top = self._top_two_damage_outcomes(counts, actual_trials)
-        return peak, lethal_hits / actual_trials, top
+        return stats.max_face, stats.lethal_hits / stats.trials, stats.top_outcomes
 
     def _enemy_board_after_exhaust_taunts(
         self,
@@ -3044,11 +3139,91 @@ class LethalChecker:
         """最近一次场攻计算使用的法术说明（供 Overlay 显示）。"""
         return getattr(self, "_overlay_spell_note", "")
 
+    def _estimate_taunt_unlock_face(
+        self,
+        defn,
+        card,
+        enemy_minions: list,
+        fighters: list,
+        *,
+        defender_shield: bool,
+        player_id: Optional[int],
+    ) -> int:
+        """沉默/消灭嘲讽后能多打出的场面脸伤（满手裁剪用）。"""
+        from .combat_sim import project_board_face_after_spell
+
+        if not enemy_minions or not any(
+            m.get("taunt") and int(m.get("health", 0) or 0) > 0
+            and m.get("kind") != "hero"
+            for m in enemy_minions
+        ):
+            return 0
+        before = project_board_face_after_spell(
+            deepcopy(enemy_minions), deepcopy(fighters), defender_shield,
+        )
+        ts = deepcopy(enemy_minions)
+        fs = deepcopy(fighters)
+        self._preview_ghoul_for_toxic_breath(fs, card, player_id)
+        try:
+            defn.apply(
+                ts, fs, mult=1, enemy_shield=defender_shield,
+                card=card, gs=self.game_state, player_id=player_id,
+                spell_power=0,
+            )
+        except Exception:
+            return 0
+        after = project_board_face_after_spell(ts, fs, defender_shield)
+        return max(0, int(after) - int(before))
+
+    def _preview_ghoul_for_toxic_breath(self, fighters: list, card, player_id) -> None:
+        """满手裁剪时，毒性吐息要算上技能即将召出的冲锋食尸鬼。"""
+        cid = (getattr(card, "card_id", None) or "") if card is not None else ""
+        if cid not in ("CORE_EDR_002", "EDR_002"):
+            return
+        from .hero_power_board import dk_ghoul_charge_stats, usable_hero_power
+        from .spell_board import _summon_friendly_fighter, unit_is_undead
+
+        if any(
+            unit_is_undead(f)
+            and int(f.get("health", 0) or 0) > 0
+            and int(f.get("attacks_left", 0) or 0) > 0
+            and not f.get("poisonous")
+            for f in fighters
+        ):
+            return
+        pid = player_id if player_id is not None else self.game_state.local_player_id
+        if pid is None:
+            return
+        hero = self.game_state.get_hero(pid)
+        if hero is None:
+            return
+        mana = int(hero.tags.get("RESOURCES", 0) or 0) - int(
+            hero.tags.get("RESOURCES_USED", 0) or 0
+        )
+        spell_cost = int(getattr(card, "cost", 2) or 2)
+        if mana < spell_cost + 2:
+            return
+        row = usable_hero_power(self.game_state, pid, mana, next_turn=False)
+        if row is None:
+            return
+        ent = row[0]
+        stats = dk_ghoul_charge_stats(getattr(ent, "card_id", "") or "")
+        if not stats:
+            return
+        _summon_friendly_fighter(
+            fighters, stats[0], stats[1], charge=True,
+            card_id="HERO_11bpt", from_hero_power=True, undead=True,
+        )
+
     def _trim_hand_spells_for_search(
         self,
         hand_spells,
         available_mana: int,
         player_id: Optional[int],
+        *,
+        enemy_minions: Optional[list] = None,
+        fighters: Optional[list] = None,
+        defender_shield: bool = False,
     ):
         """满手牌时只保留高价值法术，避免组合爆炸（同名牌保留多张实体）。"""
         affordable = [
@@ -3060,15 +3235,104 @@ class LethalChecker:
 
         from .spell_board import spell_estimate_trim_damage
 
+        enemy = enemy_minions or []
+        ours = fighters or []
+
         def priority(item) -> tuple:
             card, defn, cost = item
             dmg = spell_estimate_trim_damage(
                 card, defn, gs=self.game_state, player_id=player_id,
             )
-            return (dmg / max(cost, 1), dmg, -cost)
+            # 对面有嘲讽时：沉默/消灭等 trim 估 0，但会解锁整块场攻
+            unlock = self._estimate_taunt_unlock_face(
+                defn, card, enemy, ours,
+                defender_shield=defender_shield, player_id=player_id,
+            )
+            score = max(int(dmg or 0), int(unlock or 0))
+            return (score / max(cost, 1), score, -cost)
 
         affordable.sort(key=priority, reverse=True)
         return affordable[:MAX_HAND_SPELLS_FOR_SEARCH]
+
+    def _estimate_combo_line_upper(
+        self,
+        seq: List,
+        fighters: List[dict],
+        *,
+        player_id: int,
+        spell_mult: int,
+        defender_shield: bool,
+        hp_direct: int = 0,
+        extra_spell_face: int = 0,
+    ) -> int:
+        """
+        Combo 层乐观上界（只剪数学上不可能更优的线）。
+        场面忽略嘲讽/突袭禁脸；须含武器攻击后友方加攻（命令之爪等），
+        否则会把「武器+爪子+技能」线剪掉造成假漏斩。
+        法术用 trim 估计（随机牌偏高默认）；trim=0 功能牌加宽松余量。
+        """
+        from .spell_board import spell_estimate_trim_damage
+
+        board = self._estimate_fighters_face_upper(fighters)
+        et = self._board_end_turn_face(player_id, defender_shield)
+        spell = int(extra_spell_face or 0) + int(hp_direct or 0)
+        utility_slack = 0
+        for defn, _cost, card in seq:
+            dmg = spell_estimate_trim_damage(
+                card, defn, gs=self.game_state, player_id=player_id,
+            )
+            dmg_i = max(0, int(dmg))
+            if dmg_i <= 0:
+                # 饮血术刷新技能、解场等：trim 看不出后续爆发，给一轮技能/场面余量
+                utility_slack += 20
+            else:
+                spell += dmg_i * max(1, int(spell_mult))
+        return board + et + spell + utility_slack
+
+    @staticmethod
+    def _estimate_fighters_face_upper(fighters: List[dict]) -> int:
+        """乐观场面打脸上界：含武器攻击后加攻/召唤冲锋，忽略突袭禁脸与友方嘲讽。"""
+        board = 0
+        for f in fighters:
+            if int(f.get("health", 0) or 0) <= 0:
+                continue
+            atk = int(f.get("atk", 0) or 0)
+            al = max(0, int(f.get("attacks_left", 0) or 0))
+            if f.get("kind") == "weapon":
+                n = min(al, max(0, int(f.get("durability", al) or 0)))
+                board += atk * n
+                board += int(f.get("buff_friendly_atk_after", 0) or 0) * n
+                bstats = f.get("buff_friendly_stats_after")
+                if bstats:
+                    board += int(bstats[0] or 0) * n
+                all_pal = f.get("buff_all_paladin_stats_after")
+                if all_pal:
+                    ba = int(all_pal[0] or 0)
+                    if ba > 0:
+                        n_pal = sum(
+                            1 for m in fighters
+                            if m.get("kind") == "minion"
+                            and int(m.get("health", 0) or 0) > 0
+                            and (m.get("paladin") or m.get("card_class") == "PALADIN")
+                        )
+                        board += ba * n_pal * n
+                summon = f.get("summon_on_attack")
+                if summon and f.get("summon_on_attack_charge"):
+                    board += int(summon[0] or 0) * n
+                if (
+                    f.get("deathrattle_buff_friendly_from_script")
+                    and n > 0
+                    and n >= max(0, int(f.get("durability", 0) or 0))
+                ):
+                    board += max(1, int(f.get("script_data_num_1", 1) or 1))
+                continue
+            board += atk * al
+            # 十字军 / 军情七处杀手：攻击时额外伤害（上界按每次攻击 +2）
+            if f.get("crusader_aura_on_attack"):
+                board += 2 * al
+            if f.get("si7_slayer_on_attack") and f.get("stealth"):
+                board += 2
+        return board
 
     def _no_taunt_direct_face_setup(
         self,
@@ -3124,6 +3388,9 @@ class LethalChecker:
         """
         hand_spells = self._trim_hand_spells_for_search(
             hand_spells, available_mana, player_id,
+            enemy_minions=enemy_minions,
+            fighters=fighters,
+            defender_shield=defender_shield,
         )
         return enumerate_spell_sequences(
             hand_spells,
@@ -3136,6 +3403,7 @@ class LethalChecker:
             gs=self.game_state,
             player_id=player_id,
             next_turn_preview=self._hero_power_next_turn(),
+            outcome_cache=self._enum_apply_cache,
         )
 
     def overlay_red_prompt_ok(self, *, opp_lethal_now: bool = False) -> bool:
@@ -3370,9 +3638,16 @@ class LethalChecker:
             defender_shield=defender_shield,
             player_id=player_id,
         )
+        # 乐观上界降序；次键：确定优先于随机、短优先
         sequences = sorted(
             sequences,
             key=lambda seq: (
+                -self._estimate_combo_line_upper(
+                    seq, fighters,
+                    player_id=player_id, spell_mult=spell_mult,
+                    defender_shield=defender_shield,
+                    extra_spell_face=direct_face,
+                ),
                 1 if self._line_needs_random(seq, fighters) else 0,
                 len(seq),
             ),
@@ -3453,6 +3728,16 @@ class LethalChecker:
                 and self._line_needs_random(seq, fighters)
             ):
                 continue
+            # Combo 层乐观上界剪枝：不可能超过当前最优则跳过
+            if best_total > 0:
+                upper0 = self._estimate_combo_line_upper(
+                    seq, fighters,
+                    player_id=player_id, spell_mult=spell_mult,
+                    defender_shield=defender_shield,
+                    extra_spell_face=direct_face,
+                )
+                if upper0 < best_total:
+                    continue
 
             full_seq = seq + direct_prefix
             # 无对手嘲讽时，若仍有解场/直伤法术，须比较先攻后法（地狱烈焰等会先伤己方随从）
@@ -3520,6 +3805,15 @@ class LethalChecker:
                 )
                 line_seq = list(seq) + ([inline_hp_step] if inline_hp_step else [])
                 line_full_seq = line_seq + direct_prefix
+                if best_total > 0:
+                    line_upper = self._estimate_combo_line_upper(
+                        line_seq, line_fighters,
+                        player_id=player_id, spell_mult=spell_mult,
+                        defender_shield=line_shield,
+                        hp_direct=hp_direct, extra_spell_face=line_direct,
+                    )
+                    if line_upper < best_total:
+                        continue
 
                 def sim_attack_first(
                     _lf=line_fighters, _lm=line_mana, _hd=hp_direct,
@@ -3566,24 +3860,75 @@ class LethalChecker:
                             mid_forced = True
                     if not mid_forced:
                         mc_orders = list(search_orders)
+                        mc_trials = self._mc_trials_for_budget(OVERLAY_MC_TRIALS)
                         best_order, sf = self._simulate_random_line_mc_best(
                             line_base_enemy, line_fighters, line_seq, mc_orders,
                             spell_mult=spell_mult, defender_shield=line_shield,
                             available_mana=line_mana, hand_charges=charges,
                             hp_direct=hp_direct, extra_spell_face=line_direct,
+                            trials=mc_trials,
                         )
                         candidates = [(best_order, sf)]
                 else:
-                    enemy = _clone_combat_states(line_base_enemy)
-                    fs = _clone_combat_states(line_fighters)
-                    spell_res, hp_end, mana_end = apply_spell_sequence_with_meta(
-                        enemy, fs, line_seq, spell_mult=spell_mult,
-                        enemy_shield=line_shield,
-                        gs=self.game_state, player_id=local_id,
-                        hero_hp=hero_hp, mana_budget=line_mana,
-                        next_turn_preview=self._hero_power_next_turn(),
-                        inline_hero_power_used=use_hp,
+                    seq_key = tuple(
+                        (d, c, card.entity_id if card else None)
+                        for d, c, card in line_seq
                     )
+                    reused_enum = False
+                    if (
+                        not use_hp
+                        and inline_hp_step is None
+                        and line_shield == defender_shield
+                        and seq_key in self._enum_apply_cache
+                    ):
+                        snap = self._enum_apply_cache[seq_key]
+                        enemy = _clone_combat_states(snap["enemy"])
+                        fs = _clone_combat_states(snap["fighters"])
+                        spell_res = deepcopy(snap["spell_res"])
+                        enum_fp = snap.get("fp")
+                        cached_mana = snap.get("mana_left")
+                        live_fp = spell_sequence_transposition_key(
+                            enemy, fs, spell_res,
+                            hero_hp=None, mana_left=cached_mana,
+                        )
+                        # 仅当缓存按相同法力预算结算时才复用（含星体平衡衍生星火等）
+                        if enum_fp is not None and live_fp == enum_fp:
+                            from .spell_board import spell_sequence_mana_left
+
+                            expected_mana = spell_sequence_mana_left(
+                                line_seq, line_mana,
+                            )
+                            if (
+                                line_mana is None
+                                or (
+                                    cached_mana is not None
+                                    and expected_mana is not None
+                                    and int(cached_mana) == int(expected_mana)
+                                )
+                            ):
+                                mana_end = (
+                                    expected_mana if expected_mana is not None
+                                    else cached_mana
+                                )
+                                hp_end = hero_hp
+                                if hp_end is not None:
+                                    hp_end = (
+                                        hp_end
+                                        - int(getattr(spell_res, "self_hero_damage", 0) or 0)
+                                        + int(getattr(spell_res, "self_hero_heal", 0) or 0)
+                                    )
+                                reused_enum = True
+                    if not reused_enum:
+                        enemy = _clone_combat_states(line_base_enemy)
+                        fs = _clone_combat_states(line_fighters)
+                        spell_res, hp_end, mana_end = apply_spell_sequence_with_meta(
+                            enemy, fs, line_seq, spell_mult=spell_mult,
+                            enemy_shield=line_shield,
+                            gs=self.game_state, player_id=local_id,
+                            hero_hp=hero_hp, mana_budget=line_mana,
+                            next_turn_preview=self._hero_power_next_turn(),
+                            inline_hero_power_used=use_hp,
+                        )
                     mana_end, refresh_direct = self._reapply_hero_powers_after_refresh(
                         fs, mana_end, defender_shield=line_shield, enemy=enemy,
                         refresh_count=int(getattr(spell_res, "refresh_hero_powers", 0) or 0),
@@ -3642,7 +3987,9 @@ class LethalChecker:
                             line_base_enemy, line_fighters, line_seq, order,
                             spell_mult=spell_mult, defender_shield=line_shield,
                             available_mana=line_mana, hand_charges=charges,
-                            trials=OVERLAY_MC_TRIALS,
+                            trials=self._mc_trials_for_budget(OVERLAY_MC_TRIALS),
+                            hp_direct=hp_direct,
+                            extra_spell_face=line_direct,
                         )
                     else:
                         score = float(
@@ -3721,13 +4068,16 @@ class LethalChecker:
                                 available_mana=available_mana,
                                 hero_power_name=note_hp_name,
                             )
-                    elif (
-                        total > display_total
-                        or (
-                            total == display_total
-                            and (
-                                spell_face > display_spell_face
-                                or hero_buff_face > display_hero_buff_face
+                    elif total > display_total or (
+                        total == display_total
+                        and (
+                            spell_face > display_spell_face
+                            or hero_buff_face > display_hero_buff_face
+                            # 同分且法术不增伤：更短序列（避免空场误伤牌抢展示）
+                            or (
+                                spell_face == display_spell_face
+                                and hero_buff_face == display_hero_buff_face
+                                and len(line_full_seq) < len(display_seq)
                             )
                         )
                     ):
@@ -4814,9 +5164,13 @@ class LethalChecker:
                     fighter, cid,
                     infused_cleave=False,
                 )
-                from .secret_attack_board import stamp_crusader_aura_on_fighter
+                from .secret_attack_board import (
+                    stamp_crusader_aura_on_fighter,
+                    stamp_si7_slayer_on_fighter,
+                )
 
                 stamp_crusader_aura_on_fighter(fighter, self.game_state, player_id)
+                stamp_si7_slayer_on_fighter(fighter, self.game_state, player_id)
                 by_id[eid] = fighter
             used = (
                 effective_attacks_this_turn(card.entity, active_turn=card.active_turn)
@@ -4871,7 +5225,10 @@ class LethalChecker:
                 )
                 from .hero_power_board import is_dk_ghoul_board_token
                 from .damaged_spell_power import fighter_spell_power_from_entity
-                from .secret_attack_board import stamp_crusader_aura_on_fighter
+                from .secret_attack_board import (
+                    stamp_crusader_aura_on_fighter,
+                    stamp_si7_slayer_on_fighter,
+                )
                 from .spell_board import entity_is_paladin
 
                 cid = ent.card_id or ""
@@ -4892,6 +5249,7 @@ class LethalChecker:
                     "attacks_left": 0,
                     "can_face": False,
                     "rush": ent.tags.get("RUSH", 0) == 1,
+                    "stealth": ent.tags.get("STEALTH", 0) == 1,
                     "dormant": is_dormant(ent, self.game_state),
                     "silenced": is_silenced(ent),
                     "from_hero_power": from_hp,
@@ -4909,6 +5267,9 @@ class LethalChecker:
                     passive["card_class"] = "PALADIN"
                 stamp_fighter_attack_effects(passive, cid, infused_cleave=False)
                 stamp_crusader_aura_on_fighter(
+                    passive, self.game_state, player_id,
+                )
+                stamp_si7_slayer_on_fighter(
                     passive, self.game_state, player_id,
                 )
                 fighters.append(passive)

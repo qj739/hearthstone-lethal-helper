@@ -169,7 +169,7 @@ def location_has_valid_target(
     if "REV_290" in defn.card_ids or "CORE_REV_290" in defn.card_ids:
         return pick_cathedral_buff_target(gs, player_id) is not None
     ids = set(defn.card_ids)
-    if ids & {"TIME_044", "TIME_044t1", "TIME_044t2", "JAM_009"}:
+    if ids & {"TIME_044", "TIME_044t1", "TIME_044t2", "JAM_009", "WW_001t11"}:
         return _has_friendly_minion(gs, player_id)
     return True
 
@@ -196,6 +196,60 @@ def _pick_buff_fighter_index(fighters: List[dict]) -> Optional[int]:
             best_key = key
             best_idx = i
     return best_idx
+
+
+def _pick_set_stats_fighter_index(
+    fighters: List[dict],
+    *,
+    new_atk: int,
+    new_health: int,
+) -> Optional[int]:
+    """将属性设为固定值时，选本回合打脸收益最大的友方随从（冲锋食尸鬼等）。"""
+    best_idx: Optional[int] = None
+    best_key = None
+    for i, f in enumerate(fighters):
+        if f.get("kind") != "minion" or int(f.get("health", 0) or 0) <= 0:
+            continue
+        if f.get("dormant"):
+            continue
+        old_atk = int(f.get("atk", 0) or 0)
+        swings = int(f.get("attacks_left", 0) or 0)
+        can_face = bool(f.get("can_face", True))
+        face_delta = swings * (new_atk - old_atk) if can_face and swings > 0 else -10_000
+        key = (
+            face_delta,
+            1 if swings > 0 and can_face else 0,
+            1 if swings > 0 else 0,
+            -old_atk,
+        )
+        if best_key is None or key > best_key:
+            best_key = key
+            best_idx = i
+    return best_idx
+
+
+def _apply_magma_fist_rock(
+    taunts,
+    fighters,
+    *,
+    mult: int = 1,
+    enemy_shield=False,
+    **_kw,
+) -> SpellApplyResult:
+    """魔拳岩 WW_001t11：将一个随从变为 6/7（斩杀取本回合打脸收益最大的友方）。"""
+    del taunts, enemy_shield
+    new_atk = 6 * max(int(mult), 1)
+    new_hp = 7 * max(int(mult), 1)
+    idx = _pick_set_stats_fighter_index(
+        fighters, new_atk=new_atk, new_health=new_hp,
+    )
+    if idx is None:
+        return SpellApplyResult()
+    unit = dict(fighters[idx])
+    unit["atk"] = new_atk
+    unit["health"] = new_hp
+    fighters[idx] = unit
+    return SpellApplyResult()
 
 
 def _apply_gnomeregan_buff(
@@ -311,6 +365,13 @@ def _register_p0_locations() -> None:
         base_cost=0,
         name="闪亮舞池",
         apply=_apply_glitter_dancefloor,
+        uses_random=False,
+    ))
+    _register_location(BoardSpellDef(
+        card_ids=("WW_001t11",),
+        base_cost=0,
+        name="魔拳岩",
+        apply=_apply_magma_fist_rock,
         uses_random=False,
     ))
 

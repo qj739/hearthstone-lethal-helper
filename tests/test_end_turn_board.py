@@ -453,6 +453,43 @@ def test_masticator_hand_opp_turn_overlay():
     print("OK hand muncher opp turn overlay", face)
 
 
+def test_masticator_hand_lethal_through_taunt_before_play():
+    """手牌嚼嚼怪：对手低血+嘲讽时，打出前就应识别回合末穿嘲斩杀。"""
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.active_player_id = 1
+    gs.in_game = True
+    _set_local_turn(gs, 1)
+    _hero(gs, 1, 1, mana=10, used=0)
+    _hero(gs, 2, 2)
+    opp = gs.get_hero(2)
+    opp.health = 30
+    opp.damage = 26
+    opp.tags["HEALTH"] = 30
+    opp.tags["DAMAGE"] = 26
+    # 1/5 嘲讽：英雄 4 血更低 → 嚼嚼怪回合末打脸 5
+    _minion(gs, 20, 2, 1, 5, card_id="Core_UNG_072", taunt=True, can_attack=False)
+    hand = gs.get_entity(50)
+    hand.cardtype = "MINION"
+    hand.controller = 1
+    hand.zone = "HAND"
+    hand.card_id = "RLK_720"
+    hand.cost = 6
+    hand.atk = 5
+    hand.health = 6
+    hand.tags.update({"ZONE": "HAND", "ATK": 5, "479": 5, "HEALTH": 6, "COST": 6})
+
+    lc = LethalChecker(gs)
+    assert lc.is_local_turn()
+    face = lc.overlay_board_face_damage()
+    assert face >= 5, f"expected >=5 overlay face, got {face}"
+    _, _, has_lethal = lc.calculate_lethal()
+    assert has_lethal, "hand muncher should lethal through taunt before play"
+    assert lc.overlay_lethal_prompt_ok(has_lethal)
+    print("OK hand muncher taunt lethal before play", face)
+
+
 def test_mograine_aura_without_minion():
     """下回合：本体已离场，英雄附着 RLK_706e3 仍 +3。"""
     gs = GameState()

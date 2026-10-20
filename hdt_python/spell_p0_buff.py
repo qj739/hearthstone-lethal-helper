@@ -16,6 +16,7 @@ from .spell_board import (
     _pick_best_spell_target_fighter,
     _register,
     _summon_friendly_fighter,
+    unit_is_undead,
 )
 
 
@@ -166,6 +167,20 @@ def _apply_hip_hop(
 
 def _apply_chaos_strike(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw,) -> SpellApplyResult:
     _add_temp_hero_attack(fighters, _sd(2, mult=mult, spell_power=spell_power))
+    return SpellApplyResult()
+
+
+def _apply_turn_the_tides(
+    taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw,
+) -> SpellApplyResult:
+    """潮流逆转：本回合英雄 +3 攻，召唤一个 3/3 突袭元素（过载 v1 不计）。"""
+    del taunts, enemy_shield, spell_power
+    scale = max(int(mult), 1)
+    _add_temp_hero_attack(fighters, 3 * scale)
+    for _ in range(scale):
+        _summon_friendly_fighter(
+            fighters, 3, 3, rush=True, card_id="TTN_722t",
+        )
     return SpellApplyResult()
 
 
@@ -478,6 +493,67 @@ def _apply_sunscreen(
     return SpellApplyResult()
 
 
+def _pick_panther_mask_target(
+    fighters: List[dict],
+    gs=None,
+    player_id=None,
+):
+    """奔行豹面具：优先本回合可打脸、设为 5 攻后打脸增益最大的友方。"""
+    from .spell_board import _friendly_spell_target_minions
+
+    cands = _friendly_spell_target_minions(fighters, gs, player_id)
+    if not cands:
+        return None
+    return max(
+        cands,
+        key=lambda item: (
+            max(
+                0,
+                5 - int(item[2].get("atk", 0) or 0),
+            )
+            * max(int(item[2].get("attacks_left", 0) or 0), 0)
+            * (1 if item[2].get("can_face", True) else 0),
+            1 if int(item[2].get("attacks_left", 0) or 0) > 0 else 0,
+            -int(item[2].get("atk", 0) or 0),
+            int(item[2].get("health", 0) or 0),
+        ),
+    )
+
+
+def _apply_panther_mask(
+    taunts,
+    fighters,
+    *,
+    mult,
+    enemy_shield,
+    gs=None,
+    player_id=None,
+    **_kw,
+) -> SpellApplyResult:
+    """奔行豹面具：将一个友方随从变为 5/4 并潜行（抽 2 / 潜行 v1 不计）。"""
+    del taunts, enemy_shield
+    picked = _pick_panther_mask_target(fighters, gs=gs, player_id=player_id)
+    if picked is None:
+        return SpellApplyResult()
+    atk = 5 * max(1, int(mult))
+    hp = 4 * max(1, int(mult))
+    src, key, unit = picked
+    if src == "fighter":
+        i = int(key)
+        fighters[i] = _set_minion_atk_health(fighters[i], atk, hp)
+        return SpellApplyResult()
+    eid = key
+    for i, f in enumerate(fighters):
+        if f.get("entity_id") == eid:
+            fighters[i] = _set_minion_atk_health(f, atk, hp)
+            return SpellApplyResult()
+    buffed = _set_minion_atk_health(unit, atk, hp)
+    buffed["attacks_left"] = int(unit.get("attacks_left", 0) or 0)
+    buffed["can_face"] = bool(unit.get("can_face", True))
+    fighters.append(buffed)
+    return SpellApplyResult()
+
+
 def _ensure_board_minions_in_fighters(
     fighters: List[dict],
     gs=None,
@@ -569,6 +645,16 @@ def _apply_silvermoon_portal(
     return SpellApplyResult()
 
 
+def _apply_continued_entropy(
+    taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw,
+) -> SpellApplyResult:
+    """续连熵能 TIME_026：全体友方随从 +1/+1。洗入时空撕裂不计本回合斩杀。"""
+    del taunts, enemy_shield, spell_power
+    bonus = max(int(mult), 1)
+    _buff_all_friendly_minions(fighters, bonus_atk=bonus, bonus_health=bonus)
+    return SpellApplyResult()
+
+
 def _apply_anti_magic_shell(
     taunts,
     fighters,
@@ -619,9 +705,47 @@ def _apply_banana_bunch(
     return res
 
 
+def _apply_toxic_breath(taunts, fighters: List[dict], **_kw) -> SpellApplyResult:
+    """毒性吐息：使一个能攻击的友方亡灵获得剧毒。优先还打不死嘲讽的低攻目标。"""
+    taunt_hp = 0
+    for unit in taunts or []:
+        if unit.get("kind") == "hero" or int(unit.get("health", 0) or 0) <= 0:
+            continue
+        if not unit.get("taunt"):
+            continue
+        taunt_hp = max(taunt_hp, int(unit.get("health", 0) or 0))
+    best = None
+    best_key = None
+    for fighter in fighters:
+        if fighter.get("kind") != "minion":
+            continue
+        if int(fighter.get("health", 0) or 0) <= 0:
+            continue
+        if int(fighter.get("attacks_left", 0) or 0) <= 0:
+            continue
+        if fighter.get("poisonous"):
+            continue
+        if not unit_is_undead(fighter):
+            continue
+        atk = int(fighter.get("atk", 0) or 0)
+        key = (
+            1 if taunt_hp > atk else 0,
+            int(fighter.get("attacks_left", 0) or 0),
+            -atk,
+        )
+        if best_key is None or key > best_key:
+            best = fighter
+            best_key = key
+    if best is None:
+        return SpellApplyResult()
+    best["poisonous"] = True
+    return SpellApplyResult()
+
+
 def _register_p0_buff() -> None:
     specs = [
         (("CORE_BT_035", "BT_035"), 2, "混乱打击", _apply_chaos_strike, False),
+        (("TTN_722",), 3, "潮流逆转", _apply_turn_the_tides, False),
         (("WORK_022",), 3, "打卡", _apply_punch_card, False),
         (("ETC_363",), 1, "主歌乐句", _apply_verse_riff, False),
         (("BT_011",), 5, "正义圣契", _apply_libram_of_justice, False),
@@ -633,6 +757,7 @@ def _register_p0_buff() -> None:
         (("YOP_026",), 5, "树木生长", _apply_arbor_up, False),
         (("CATA_138",), 3, "森林赠礼", _apply_forests_gift, False),
         (("WW_027",), 2, "可靠陪伴", _apply_reliable_companion, False),
+        (("BE_152t",), 2, "太阳的祝福", _apply_reliable_companion, False),
         (("MAW_021", "CORE_MAW_021"), 3, "问心无愧", _apply_reliable_companion, False),
         (("CORE_BT_292", "BT_292"), 2, "阿达尔之手", _apply_hand_of_adal, False),
         (("REV_842", "CORE_REV_842"), 1, "晋升", _apply_promotion, False),
@@ -642,6 +767,8 @@ def _register_p0_buff() -> None:
         (("JAIL_447t",), 4, "侦探服", _apply_detectives_clothes, False),
         (("VAC_917t",), 1, "防晒霜", _apply_sunscreen, False),
         (("DINO_417",), 1, "安魂仪式", _apply_requiem, False),
+        (("TIME_026",), 1, "续连熵能", _apply_continued_entropy, False),
+        (("CORE_EDR_002", "EDR_002"), 2, "毒性吐息", _apply_toxic_breath, False),
         (("RLK_048", "RLK_Prologue_RLK_048"), 3, "反魔法护罩", _apply_anti_magic_shell, False),
         (("ICC_314t7",), 4, "反魔法护罩", _apply_anti_magic_shell, False),
         (("TOY_716",), 4, "光速抢购", _apply_flash_sale, False),
@@ -649,6 +776,7 @@ def _register_p0_buff() -> None:
         (("ETC_201", "ETC_201t", "ETC_201t2"), 1, "一串香蕉", _apply_banana_bunch, False),
         (("JAIL_326",), 6, "审判", _apply_judgment_violet, False),
         (("CORE_EX1_619", "EX1_619"), 2, "生而平等", _apply_equality, False),
+        (("DINO_432",), 4, "奔行豹面具", _apply_panther_mask, False),
     ]
     for card_ids, cost, name, fn, uses_random in specs:
         _register(

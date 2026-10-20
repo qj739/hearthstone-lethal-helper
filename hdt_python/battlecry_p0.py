@@ -46,6 +46,8 @@ from .spell_board import (
     _hero_unit,
     _add_temp_hero_attack,
     hand_effect_active,
+    herald_summon_azshara_soldier,
+    player_combo_active,
     quickdraw_active,
     player_corpses,
     spell_script_damage,
@@ -370,10 +372,16 @@ def _apply_hardcore_cultist(
     )
 
 
-def _apply_eulogizer(t, f, *, mult, enemy_shield, gs=None, player_id=None, **_kw):
-    corpses = player_corpses(gs, player_id) if gs and player_id is not None else 3
-    if corpses < 3:
-        return SpellApplyResult()
+def _apply_eulogizer(
+    t, f, *, mult, enemy_shield, gs=None, player_id=None, card=None, **_kw,
+):
+    """悼词宣诵者：耗 3 残骸造成 3 伤；锻造版 TTN_457t 改为获得残骸并必定造成 3 伤。"""
+    cid = (card.card_id if card is not None else "") or ""
+    forged = cid == "TTN_457t" or cid.endswith("TTN_457t")
+    if not forged:
+        corpses = player_corpses(gs, player_id) if gs and player_id is not None else 3
+        if corpses < 3:
+            return SpellApplyResult()
     return _apply_optimal_single_target_damage(
         t, f, 3 * mult, enemy_shield=enemy_shield,
     )
@@ -978,6 +986,44 @@ def _apply_sharpclaw(t, f, *, mult, **_kw) -> SpellApplyResult:
     return SpellApplyResult()
 
 
+def _apply_end_of_time_shadow(t, f, *, mult, card=None, **_kw) -> SpellApplyResult:
+    """时光之末的阴影：潜行，法术伤害+1（本体失调）。"""
+    atk = hand_minion_attack(card) if card is not None else 3
+    hp = hand_minion_health(card) if card is not None else 3
+    _summon_friendly_fighter(
+        f, atk * mult, hp * mult, card_id="END_031",
+    )
+    if f:
+        f[-1]["spellpower"] = max(1, int(mult))
+        f[-1]["sim_summon"] = True
+        f[-1]["stealth"] = True
+    return SpellApplyResult()
+
+
+def _apply_azerite_dragon(t, f, *, mult, card=None, **_kw) -> SpellApplyResult:
+    """艾泽里特龙：战吼使手牌/牌库/战场其他随从 +3/+3；斩杀只结算场面（本体失调）。"""
+    bonus = 3 * max(1, int(mult))
+    before = {
+        id(u) for u in f
+        if u.get("kind") == "minion" and int(u.get("health", 0) or 0) > 0
+    }
+    atk = hand_minion_attack(card) if card is not None else 5
+    hp = hand_minion_health(card) if card is not None else 5
+    _summon_friendly_fighter(
+        f, atk * mult, hp * mult, card_id="DEEP_999t4",
+    )
+    for unit in f:
+        if unit.get("kind") != "minion" or int(unit.get("health", 0) or 0) <= 0:
+            continue
+        if id(unit) not in before:
+            continue
+        unit["atk"] = int(unit.get("atk", 0) or 0) + bonus
+        unit["health"] = int(unit.get("health", 0) or 0) + bonus
+        if "max_health" in unit:
+            unit["max_health"] = int(unit.get("max_health", 0) or 0) + bonus
+    return SpellApplyResult()
+
+
 def _grant_rush_on_buff_target(
     fighters: List[dict],
     picked: tuple,
@@ -1344,6 +1390,142 @@ def _violet_stealable_count(unit: dict) -> int:
     return sum(1 for k in _VIOLET_STEAL_KEYS if unit.get(k))
 
 
+def _hand_has_dark_gift_minion(
+    gs: Optional["GameState"], player_id: Optional[int],
+) -> bool:
+    """手牌是否有带黑暗之赐的随从（HAS_DARK_GIFT）。"""
+    if gs is None or player_id is None:
+        return False
+    for card in gs.get_hand(player_id):
+        if not getattr(card, "is_minion", False):
+            continue
+        gift = card.tags.get("HAS_DARK_GIFT")
+        if gift is not None and int(gift) != 0:
+            return True
+        if int(card.tags.get("DARK_GIFT", 0) or 0) != 0:
+            return True
+    return False
+
+
+def _friendly_minions_died_this_game(
+    gs: Optional["GameState"],
+    player_id: Optional[int],
+    card=None,
+) -> int:
+    """本局友方随从死亡数（艾森娜门槛）。亮边/脚本剩余 0 视为已就绪。"""
+    if card is not None:
+        if hand_effect_active(card):
+            return 20
+        rem = (getattr(card, "tags", None) or {}).get("TAG_SCRIPT_DATA_NUM_1")
+        if rem is not None and int(rem) == 0:
+            return 20
+    if gs is None or player_id is None:
+        return 0
+    hero = gs.get_hero(player_id)
+    if hero is not None:
+        v = hero.tags.get("NUM_FRIENDLY_MINIONS_THAT_DIED_THIS_GAME")
+        if v is not None:
+            return max(0, int(v))
+    for eid, pid in gs.player_ids.items():
+        if pid != player_id:
+            continue
+        player = gs.get_entity(eid)
+        if player is None:
+            continue
+        v = player.tags.get("NUM_FRIENDLY_MINIONS_THAT_DIED_THIS_GAME")
+        if v is not None:
+            return max(0, int(v))
+    return 0
+
+
+def _apply_opu_the_unseen(
+    t, f, *, mult, enemy_shield, card=None,
+    combo_active=False, gs=None, player_id=None, **_kw,
+) -> SpellApplyResult:
+    """潜踪大师奥普：战吼施放刀扇（仅敌方随从）；连击再施一次。亡语忽略。"""
+    res = _apply_enemy_minions_aoe(t, f, 1 * mult, enemy_shield=enemy_shield)
+    # 本体有 COMBO 关键字；日志未必写 COMBO tag，故连击状态单独认
+    combo = (
+        hand_effect_active(
+            card, combo_active=combo_active, gs=gs, player_id=player_id,
+        )
+        or bool(combo_active)
+        or player_combo_active(gs, player_id)
+    )
+    if combo:
+        extra = _apply_enemy_minions_aoe(t, f, 1 * mult, enemy_shield=enemy_shield)
+        _merge_spell_result(res, extra)
+    return res
+
+
+def _apply_aessina(
+    t, f, *, mult, enemy_shield, card=None, gs=None, player_id=None, rng=None, **_kw,
+) -> SpellApplyResult:
+    """艾森娜：本局≥20 友方随从死亡时，20 伤随机分到所有敌人（含脸）。"""
+    if _friendly_minions_died_this_game(gs, player_id, card) < 20:
+        return SpellApplyResult()
+    return _apply_random_split_damage(
+        t, f, 20 * mult, enemy_shield=enemy_shield, rng=_rng(rng),
+        include_enemy_hero=True,
+    )
+
+
+def _apply_dragon_turtle(
+    t, f, *, mult, enemy_shield, card=None, gs=None, player_id=None, **_kw,
+) -> SpellApplyResult:
+    """龙龟：手牌有黑暗之赐随从时英雄本回合 +3 攻（甲忽略）。"""
+    del t, enemy_shield
+    if hand_effect_active(card) or _hand_has_dark_gift_minion(gs, player_id):
+        _add_temp_hero_attack(f, 3 * mult)
+    return SpellApplyResult()
+
+
+def _apply_silithid_queen(
+    t, f, *, mult, enemy_shield, card=None, **_kw,
+) -> SpellApplyResult:
+    """异种虫女王：突袭本体上场；延系亮边则英雄本回合 +5 攻。"""
+    del t, enemy_shield
+    atk = hand_minion_attack(card) if card is not None else 5
+    hp = hand_minion_health(card) if card is not None else 2
+    if atk <= 0:
+        atk = 5
+    if hp <= 0:
+        hp = 2
+    _summon_friendly_fighter(
+        f, atk * mult, hp * mult, rush=True, card_id="TLC_903",
+    )
+    if hand_effect_active(card):
+        _add_temp_hero_attack(f, 5 * mult)
+    return SpellApplyResult()
+
+
+def _apply_armored_bloodletter(
+    t, f, *, mult, enemy_shield, card=None, gs=None, player_id=None, **_kw,
+) -> SpellApplyResult:
+    """装甲放血纳迦：突袭本体 + 战吼兆示艾萨拉士兵（英雄当回合加攻）。"""
+    del t, enemy_shield
+    atk = hand_minion_attack(card) if card is not None else 3
+    hp = hand_minion_health(card) if card is not None else 1
+    if atk <= 0:
+        atk = 3
+    if hp <= 0:
+        hp = 1
+    _summon_friendly_fighter(
+        f, atk * mult, hp * mult, rush=True, card_id="CATA_525",
+    )
+    herald_summon_azshara_soldier(
+        f, mult=mult, gs=gs, player_id=player_id,
+    )
+    return SpellApplyResult()
+
+
+def _apply_chronikar(t, f, *, mult, enemy_shield, **_kw) -> SpellApplyResult:
+    """克罗妮卡：战吼本回合英雄 +3 攻（跨回合 buff 忽略）。"""
+    del t, enemy_shield
+    _add_temp_hero_attack(f, 3 * mult)
+    return SpellApplyResult()
+
+
 def _apply_violet_spellsword(
     taunts,
     fighters,
@@ -1468,7 +1650,7 @@ def _register_p0_battlecry() -> None:
         # 1. 直伤
         (("TOY_101",), 5, "暗夜精灵女猎手", _apply_night_elf_huntress, False),
         (("ETC_209",), 3, "硬核信徒", _apply_hardcore_cultist, False),
-        (("TTN_457",), 3, "悼词宣诵者", _apply_eulogizer, False),
+        (("TTN_457", "TTN_457t"), 3, "悼词宣诵者", _apply_eulogizer, False),
         # 最低血并列时随机目标，须走 MC 概率（勿标确定斩）
         (("TOY_642",), 4, "球霸野猪人", _apply_ball_hog, True),
         (("BT_495", "TOY_913t3"), 5, "刃缚精锐", _apply_bladebound_elite, False),
@@ -1517,7 +1699,7 @@ def _register_p0_battlecry() -> None:
         # 4. 移除
         (("CATA_201",), 9, "暮光主母", _apply_twilight_mistress, False),
         (("RLK_951",), 2, "验尸官", _apply_coroner, False),
-        (("CORE_SW_066",), 4, "王室图书管理员", _apply_royal_librarian, False),
+        (("CORE_SW_066", "SW_066"), 4, "王室图书管理员", _apply_royal_librarian, False),
         (("DRG_076",), 5, "无面腐蚀者", _apply_faceless_corruptor, False),
         (("RLK_741",), 8, "窃魂者", _apply_soulstealer, False),
         (("VAC_341",), 4, "断生鱿鱼", _apply_undercooked_calamari, False),
@@ -1539,6 +1721,8 @@ def _register_p0_battlecry() -> None:
         (("ICC_705", "CORE_ICC_705"), 7, "骨魇", _apply_bonemare, False),
         (("TOY_513",), 4, "沙画元素", _apply_sand_elemental, False),
         (("AV_294",), 2, "怒爪精锐", _apply_sharpclaw, False),
+        (("DEEP_999t4",), 4, "艾泽里特龙", _apply_azerite_dragon, False),
+        (("END_031",), 3, "时光之末的阴影", _apply_end_of_time_shadow, False),
         (("JAIL_998",), 3, "迪菲亚私运者", _apply_defias_smuggler, False),
         (("JAM_027",), 2, "饭圈迷弟", _apply_fanboy, False),
         (("CORE_CS2_188", "CS2_188"), 1, "叫嚣的中士", _apply_abusive_sergeant, False),
@@ -1551,6 +1735,12 @@ def _register_p0_battlecry() -> None:
         (("TIME_019",), 4, "时间流具象", _apply_manifested_timeways, False),
         (("EDR_810",), 3, "丑恶的残躯", _apply_ugly_remains, False),
         (("JAIL_101",), 3, "紫罗兰惩戒者", _apply_violet_spellsword, False),
+        (("TLC_522",), 6, "潜踪大师奥普", _apply_opu_the_unseen, False),
+        (("EDR_430",), 8, "艾森娜", _apply_aessina, True),
+        (("FIR_956",), 4, "龙龟", _apply_dragon_turtle, False),
+        (("TLC_903",), 5, "异种虫女王", _apply_silithid_queen, False),
+        (("CATA_525",), 3, "装甲放血纳迦", _apply_armored_bloodletter, False),
+        (("END_006",), 5, "克罗妮卡", _apply_chronikar, False),
     ]
     for card_ids, cost, name, fn, uses_random in specs:
         _register_bc(

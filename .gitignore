@@ -38,6 +38,7 @@ concede_report.txt
 *.log
 Logs/
 agent-tools/
+lethal_misses/
 
 # PyInstaller output
 *.exe

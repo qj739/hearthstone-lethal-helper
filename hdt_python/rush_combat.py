@@ -138,7 +138,7 @@ def simulate_minion_face_hits(
     *,
     secret_active: bool = False,
 ) -> List[int]:
-    """无嘲讽时随从打脸伤害列表（十字军光环 + 影犬攻击后 buff）。"""
+    """无嘲讽时随从打脸伤害列表（十字军/军情七处杀手 + 影犬攻击后 buff）。"""
     from .secret_attack_board import crusader_strike_attack, apply_crusader_buff_after_strike
 
     hits: List[int] = []
@@ -164,6 +164,9 @@ def simulate_minion_face_hits(
             apply_crusader_buff_after_strike(strike_f)
             running_atk = int(strike_f.get("atk", 0) or 0)
             f["atk"] = running_atk
+            f["health"] = int(strike_f.get("health", f.get("health", 0)) or 0)
+            if "stealth" in strike_f:
+                f["stealth"] = bool(strike_f.get("stealth"))
             apply_buff_other_beasts_after_attack(f, fighters)
     return hits
 

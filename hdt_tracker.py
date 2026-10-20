@@ -57,6 +57,7 @@ from hdt_python.log_watcher import LogWatcherManager, find_power_log_path, insta
 from hdt_python.board_damage import board_active_turn_for_display, living_taunt_minions
 from hdt_python.power_parser import PowerLogParser, GameState
 from hdt_python.lethal_checker import LethalChecker, MIN_LETHAL_PROMPT_PROB
+from hdt_python.lethal_miss_audit import LethalMissAuditor
 from hdt_python.arena_season_bulk import register_arena_season_gap
 
 register_arena_season_gap()
@@ -96,6 +97,9 @@ class HearthstoneTracker:
         self.power_parser: PowerLogParser = None
         self.lethal_checker: LethalChecker = None
         self.last_lethal_check = False
+        self.miss_auditor = LethalMissAuditor(on_miss=self._on_lethal_miss_found)
+        self._was_local_turn = False
+        self._miss_banner: str | None = None
         self._overlay_dirty = True
         self._console_dirty = True
         self._force_immediate_overlay = False
@@ -233,6 +237,16 @@ class HearthstoneTracker:
                 hero_ids = self.game_state.hero_entity_ids
                 if opp and hero_ids.get(opp) == getattr(entity, "entity_id", None):
                     self._invalidate_lethal_overlay(immediate=True)
+            # 漏斩审计：动手后才亮的提示不算「回合初」
+            local = self.game_state.local_player_id
+            if tag in ("JUST_PLAYED", "NUM_ATTACKS_THIS_TURN") and local is not None:
+                if self.game_state.is_entity_controlled_by(entity, local):
+                    try:
+                        acted = int(value) >= 1
+                    except (TypeError, ValueError):
+                        acted = bool(value)
+                    if acted:
+                        self.miss_auditor.on_local_action()
             immediate = tag in (
                 "EXHAUSTED", "NUM_ATTACKS_THIS_TURN", "1196", "JUST_PLAYED",
                 "TURN", "CURRENT_PLAYER", "POWERED_UP", "COMBO_ACTIVE", "DAMAGE",
@@ -249,6 +263,7 @@ class HearthstoneTracker:
         self.power_parser.on("change_entity", self._on_change_entity)
         self.power_parser.on("entity_transform_ready", self._on_entity_transform_ready)
         self.power_parser.on("game_start", self._on_game_start)
+        self.power_parser.on("match_ending", self._on_match_ending)
         self.power_parser.on("game_end", self._on_game_end)
 
     def _on_power_log_line(self, _line: str) -> None:
@@ -306,10 +321,53 @@ class HearthstoneTracker:
 
     def _on_game_start(self):
         self.last_lethal_check = False
+        self._was_local_turn = False
+        self._miss_banner = None
+        self.miss_auditor.reset_game()
         if self.lethal_checker:
             self.lethal_checker.clear_overlay_cache()
         self._overlay_dirty = True
         self._console_dirty = True
+
+    def _on_match_ending(self):
+        """场面清空前：漏斩自检（本地胜 → 回放诊断）。"""
+        if self.power_parser is None:
+            return
+        try:
+            self.miss_auditor.on_match_ending(self.game_state, self.power_parser)
+        except Exception as e:
+            print(f"[漏斩审计] 异常: {e}")
+
+    def _on_lethal_miss_found(
+        self,
+        verdict: str,
+        diagnosis: str,
+        report_path: str,
+        game_log: str,
+    ) -> None:
+        """漏斩确认后：浮层 + 控制台提示用户去 Cursor 回溯。"""
+        report_name = Path(report_path).name
+        short = (verdict or "漏斩").replace("❌", "").strip()
+        self._miss_banner = (
+            f"⚠️ 漏斩：{short}\n"
+            f"请到 Cursor 说：有漏斩，请回溯\n"
+            f"报告 {report_name}"
+        )
+        combo = (
+            f"漏斩待回溯\n"
+            f"{short}\n"
+            f"Cursor: 有漏斩，请回溯\n"
+            f"{report_name}"
+        )
+        if self.overlay:
+            self.overlay.set_text(self._miss_banner, theme=Overlay.THEME_MISS)
+        if self.combo_overlay:
+            self.combo_overlay.set_text(combo, theme=Overlay.THEME_MISS)
+        self._overlay_dirty = True
+        print(
+            f"\n👉 浮层已提示漏斩。在 Cursor 输入：有漏斩，请回溯\n"
+            f"   ({report_name})\n"
+        )
 
     def _on_game_end(self):
         self.last_lethal_check = False
@@ -337,9 +395,20 @@ class HearthstoneTracker:
         if self.lethal_checker:
             self.lethal_checker.clear_overlay_cache()
         if self.overlay:
-            self.overlay.set_text("等待游戏开始", theme=Overlay.THEME_NORMAL)
+            if self._miss_banner:
+                self.overlay.set_text(
+                    self._miss_banner, theme=Overlay.THEME_MISS,
+                )
+            else:
+                self.overlay.set_text("等待游戏开始", theme=Overlay.THEME_NORMAL)
         if self.combo_overlay:
-            self.combo_overlay.set_text("")
+            if self._miss_banner:
+                self.combo_overlay.set_text(
+                    "漏斩待回溯\nCursor: 有漏斩，请回溯",
+                    theme=Overlay.THEME_MISS,
+                )
+            else:
+                self.combo_overlay.set_text("")
 
     def _ensure_player_detected(self) -> bool:
         if self.power_parser:
@@ -375,6 +444,9 @@ class HearthstoneTracker:
             return
 
         is_local_turn = self.lethal_checker.is_local_turn()
+        if is_local_turn and not self._was_local_turn:
+            self.miss_auditor.on_local_turn_start()
+        self._was_local_turn = is_local_turn
         is_opp_turn = (
             self.lethal_checker.is_opponent_turn()
             if not is_local_turn
@@ -429,6 +501,25 @@ class HearthstoneTracker:
             print("🎯" * 30)
             self.lethal_checker.print_lethal_info()
         self.last_lethal_check = prompt_lethal or show_lethal
+
+        turn = None
+        ge_id = self.game_state.game_entity_id
+        if ge_id and ge_id in self.game_state.entities:
+            turn = self.game_state.entities[ge_id].tags.get("TURN")
+        opp_eff = 0
+        try:
+            opp_eff = int(self.lethal_checker.get_opponent_effective_hp() or 0)
+        except Exception:
+            opp_eff = health + armor
+        self.miss_auditor.note_overlay(
+            prompt_lethal=prompt_lethal,
+            show_lethal=show_lethal,
+            has_lethal=has_lethal,
+            face=int(self.lethal_checker.cached_overlay_face() or 0),
+            opp_hp=opp_eff,
+            note=self.lethal_checker.overlay_spell_note() or "",
+            turn=turn,
+        )
 
     def _refresh_console(self):
         """刷新控制台状态（约每 2 秒一次）"""

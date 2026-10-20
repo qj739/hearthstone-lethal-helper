@@ -178,6 +178,50 @@ def test_blood_infection_summons_leeches_for_end_turn():
     assert any(c.card_id == "EDR_817" for c, _, _ in hand_board_spells(gs, 1, 10))
 
 
+def test_blood_infection_cannot_summon_on_full_board():
+    """7 随从满场：血腥感染不能再出水蛭，不能靠回合结束偷血假斩。"""
+    fighters = [
+        {"kind": "minion", "atk": 1, "health": 1, "card_id": f"m{i}", "attacks_left": 0}
+        for i in range(7)
+    ]
+    _apply_blood_treant_infection([], fighters, mult=1, enemy_shield=False)
+    assert sum(1 for f in fighters if f.get("card_id") == "EDR_810t") == 0
+    assert len([f for f in fighters if f.get("kind") == "minion" and f.get("health", 0) > 0]) == 7
+
+    gs = GameState()
+    gs.local_player_id = 1
+    gs.opponent_player_id = 2
+    gs.active_player_id = 1
+    gs.in_game = True
+    _hero(gs, 10, 1, mana=10)
+    _hero(gs, 20, 2, dmg=28, health=30)  # 2 血，只够两条水蛭偷死
+    for i in range(7):
+        _minion(gs, 30 + i, 1, 1, 1, card_id=f"full{i}", exhausted=1, ntp=1)
+    _hand_spell(gs, 40, 1, "EDR_817", 5)
+    for eid in (301, 302):
+        _deck(gs, eid, 2)
+
+    lc = LethalChecker(gs)
+    face = lc.overlay_board_face_damage()
+    _total, _, lethal = lc.calculate_lethal_potential()
+    assert not lethal, (
+        f"full board must not lethal via EDR_817 leeches: face={face} "
+        f"note={lc.overlay_spell_note()!r}"
+    )
+    assert lc.overlay_end_turn_face_for_display() == 0
+
+
+def test_blood_infection_summons_one_leech_with_one_slot():
+    """6 随从时只能再招 1 条水蛭。"""
+    fighters = [
+        {"kind": "minion", "atk": 1, "health": 1, "card_id": f"m{i}", "attacks_left": 0}
+        for i in range(6)
+    ]
+    _apply_blood_treant_infection([], fighters, mult=1, enemy_shield=False)
+    assert sum(1 for f in fighters if f.get("card_id") == "EDR_810t") == 1
+    assert len([f for f in fighters if f.get("kind") == "minion" and f.get("health", 0) > 0]) == 7
+
+
 def _hero_power(gs, eid, pid, card_id="HERO_11bp", cost=2):
     p = gs.get_entity(eid)
     p.cardtype = "HERO_POWER"
@@ -236,6 +280,8 @@ if __name__ == "__main__":
     test_ugly_remains_buffs_leech_steal()
     test_bloated_leech_enables_lethal_after_face()
     test_blood_infection_summons_leeches_for_end_turn()
+    test_blood_infection_cannot_summon_on_full_board()
+    test_blood_infection_summons_one_leech_with_one_slot()
     test_infested_breath_not_direct_prefix_tier()
     test_infested_breath_ghoul_leech_lethal()
     print("ok")

@@ -67,6 +67,34 @@ def test_corpse_spender_unaffordable_without_corpses():
     assert hand_minion_cost(card, gs, 1) == 999
 
 
+def test_corpse_spender_uses_alternate_cost_not_mana_cost():
+    """翼手龙 COST=5 展示，实际残骸费是 CARD_ALTERNATE_COST=3。"""
+    gs = GameState()
+    gs.local_player_id = 1
+    _hero(gs, 10, 1, mana=0, corpses=3)
+    card = _hand_minion(gs, 40, 1, "TLC_436", cost=5, atk=7)
+    assert hand_minion_cost(card, gs, 1) == 0
+    _hero(gs, 10, 1, mana=0, corpses=2)
+    assert hand_minion_cost(card, gs, 1) == 999
+
+
+def test_trigger_corpse_spender_still_uses_mana():
+    """空角恐角龙：触发耗残骸也带 CORPSE_SPENDER，但打出仍要法力。"""
+    gs = GameState()
+    gs.local_player_id = 1
+    _hero(gs, 10, 1, mana=4, corpses=20)
+    card = _hand_minion(gs, 40, 1, "DINO_416", cost=5, atk=5, charge=True, corpse=True)
+    # 无 CARD_ALTERNATE_COST → 不当残骸代费
+    card.tags.pop("CARD_ALTERNATE_COST", None)
+    assert hand_minion_cost(card, gs, 1) == 5
+    charges = collect_hand_charge_minions(gs, 1)
+    assert charges == [(card, 5, 5)]
+    # 剩余法力不够时不应算可打出冲锋斩杀
+    assert not any(c <= 4 for _, c, _ in charges if True)
+    playable = [(e, c, a) for e, c, a in charges if c <= 4]
+    assert playable == []
+
+
 def test_normal_minion_still_uses_mana():
     gs = GameState()
     gs.local_player_id = 1
@@ -78,5 +106,7 @@ def test_normal_minion_still_uses_mana():
 if __name__ == "__main__":
     test_corpse_spender_mana_zero_with_corpses()
     test_corpse_spender_unaffordable_without_corpses()
+    test_corpse_spender_uses_alternate_cost_not_mana_cost()
+    test_trigger_corpse_spender_still_uses_mana()
     test_normal_minion_still_uses_mana()
     print("ok")

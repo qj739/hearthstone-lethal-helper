@@ -557,6 +557,9 @@ def _register_p0_minion() -> None:
         (("CORE_EX1_259",), 3, "闪电风暴", _apply_lightning_storm, False, None),
         (("CORE_EX1_391",), 1, "猛击", _minion_damage_fn(2), False, None),
         (("CS1_130", "CORE_CS1_130"), 1, "神圣惩击", _minion_damage_fn(3), False, None),
+        (("ICC_055", "CORE_ICC_055"), 2, "吸取灵魂",
+         _minion_damage_fn(3, self_lifesteal=True, allow_no_taunt_minion_targets=True),
+         False, None),
         (("REV_249",), 1, "炽燃圣光", _apply_light_it_burns, False, None),
         (("TIME_702",), 2, "潮起潮落", _optimal_damage_fn(3), False, None),
         (("TSC_932",), 6, "血染大海", _apply_blood_in_the_water, False, None),
@@ -580,6 +583,9 @@ def _register_p0_minion() -> None:
         # 逃离紫罗兰堡 / DK：点解嘲讽，避免硬核信徒等战吼被挪去清嘲
         (("JAIL_441",), 2, "饮血术", _apply_drink_blood, False, None),
         (("RLK_024",), 4, "灵界打击", _minion_damage_fn(6, self_lifesteal=True), False, None),
+        # 诚信商家格里伏塔衍生：守卫护符伪劣版（仅随从；真货 VAC_959t07t 见 spell_p0_direct）
+        (("VAC_959t07",), 1, "守卫护符",
+         _minion_damage_fn(6, allow_no_taunt_minion_targets=True), False, None),
     ]
     for card_ids, cost, name, fn, uses_random, cost_fn in specs:
         _register(

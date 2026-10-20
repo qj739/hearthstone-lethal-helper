@@ -154,11 +154,38 @@ def _apply_follow_ghosts(taunts, fighters, *, mult, enemy_shield, **_kw) -> Spel
     return SpellApplyResult()
 
 
+def _pick_haunt_target(fighters, gs=None, player_id=None):
+    """幽魂不散选目标：优先棘嗣幼龙等「保留攻击→回合结束溢出」随从。"""
+    from .end_turn_board import HOLD_ATTACK_FOR_END_TURN_OVERFLOW_IDS
+    from .spell_board import _friendly_spell_target_minions
+
+    candidates = _friendly_spell_target_minions(fighters, gs, player_id)
+    if not candidates:
+        return None
+
+    def _hold_et(unit: dict) -> int:
+        cid = unit.get("card_id", "") or ""
+        if cid in HOLD_ATTACK_FOR_END_TURN_OVERFLOW_IDS:
+            return 1
+        if cid.startswith("CORE_") and cid[5:] in HOLD_ATTACK_FOR_END_TURN_OVERFLOW_IDS:
+            return 1
+        return 0
+
+    return max(
+        candidates,
+        key=lambda item: (
+            _hold_et(item[2]),
+            1 if int(item[2].get("attacks_left", 0) or 0) > 0 else 0,
+            int(item[2].get("atk", 0) or 0),
+        ),
+    )
+
+
 def _apply_haunt(
     taunts, fighters, *, mult, enemy_shield, gs=None, player_id=None, **_kw,
 ) -> SpellApplyResult:
     """幽魂不散：友方 +2/+3、复生、嘲讽。"""
-    picked = _pick_best_spell_target_fighter(fighters, gs=gs, player_id=player_id)
+    picked = _pick_haunt_target(fighters, gs=gs, player_id=player_id)
     if picked is None:
         return SpellApplyResult()
     _apply_buff_to_spell_target(
@@ -298,6 +325,20 @@ def _apply_body_only_bc(cid: str, default_atk: int, default_hp: int, *, taunt: b
     return _fn
 
 
+def _apply_si7_slayer(t, f, *, mult, card=None, **_kw) -> SpellApplyResult:
+    """军情七处杀手：潜行上场；友方潜行随从攻击时 +2/+2。"""
+    from .secret_attack_board import stamp_si7_slayer_aura_on_fighters
+
+    atk = hand_minion_attack(card) if card is not None else 1
+    hp = hand_minion_health(card) if card is not None else 2
+    _summon_friendly_fighter(
+        f, atk * mult, hp * mult, card_id="CAP_000",
+    )
+    f[-1]["stealth"] = True
+    stamp_si7_slayer_aura_on_fighters(f)
+    return SpellApplyResult()
+
+
 def _apply_hand_cannon(t, f, *, mult, card=None, **_kw) -> SpellApplyResult:
     """手持火炮：英雄攻击后火炮手开火。"""
     from .weapon_p0 import _equip, _weapon_stats_from_card
@@ -358,6 +399,7 @@ def register_most_wanted() -> None:
         ))
 
     bc_specs = [
+        (("CAP_000",), 3, "军情七处杀手", _apply_si7_slayer, False),
         (("CAP_106",), 5, "克罗雷船长", _apply_crowley, False),
         (("CAP_107",), 1, "火炮长", _apply_cannonmaster, False),
         (("CAP_804",), 3, "捉鬼专家", _apply_specter_specialist, False),

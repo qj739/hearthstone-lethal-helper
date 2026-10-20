@@ -780,16 +780,46 @@ def _apply_deadly_bribe(taunts, fighters, *, enemy_shield, card=None, **_kw) -> 
     return SpellApplyResult()
 
 
+def _flight_maneuvers_summon_drakes(fighters: List[dict], *, mult: int) -> None:
+    for _ in range(max(1, int(mult))):
+        _summon_friendly_fighter(fighters, 4, 2, card_id="CATA_479t3")
+        _summon_friendly_fighter(fighters, 4, 2, card_id="CATA_479t3")
+
+
+def _flight_maneuvers_buff_board(fighters: List[dict], *, mult: int) -> None:
+    bonus = max(1, int(mult))
+    for f in fighters:
+        if f.get("kind") != "minion" or f.get("health", 0) <= 0:
+            continue
+        f["atk"] = f.get("atk", 0) + bonus
+        f["shield"] = True
+
+
 def _apply_flight_maneuvers(taunts, fighters, *, mult, enemy_shield, **_kw,) -> SpellApplyResult:
     """飞龙机动：召唤两条 4/2 幼龙；己方随从 +1 攻与圣盾（v1 幼龙当回合失调）。"""
-    for _ in range(max(1, mult)):
-        _summon_friendly_fighter(fighters, 4, 2)
-        _summon_friendly_fighter(fighters, 4, 2)
-        for f in fighters:
-            if f.get("kind") != "minion" or f.get("health", 0) <= 0:
-                continue
-            f["atk"] = f.get("atk", 0) + 1
-            f["shield"] = True
+    del taunts, enemy_shield
+    for _ in range(max(1, int(mult))):
+        _flight_maneuvers_summon_drakes(fighters, mult=1)
+        _flight_maneuvers_buff_board(fighters, mult=1)
+    return SpellApplyResult()
+
+
+def _apply_flight_maneuvers_summon_only(
+    taunts, fighters, *, mult, enemy_shield, **_kw,
+) -> SpellApplyResult:
+    """已裂变半张 CATA_479t：只召唤两条 4/2 幼龙。"""
+    del taunts, enemy_shield
+    _flight_maneuvers_summon_drakes(fighters, mult=mult)
+    return SpellApplyResult()
+
+
+def _apply_flight_maneuvers_buff_only(
+    taunts, fighters, *, mult, enemy_shield, **_kw,
+) -> SpellApplyResult:
+    """已裂变半张 CATA_479t2：只给己方随从 +1 攻与圣盾。"""
+    del taunts, enemy_shield
+    for _ in range(max(1, int(mult))):
+        _flight_maneuvers_buff_board(fighters, mult=1)
     return SpellApplyResult()
 
 
@@ -813,6 +843,8 @@ def _register_p0_remove() -> None:
         (("CATA_306t2",), 4, "教派分歧", _apply_schism_copy_only, False, None),
         (("REV_239",), 3, "窒息暗影", _apply_suffocating_shadows, True, None),
         (("CATA_479",), 4, "飞龙机动", _apply_flight_maneuvers, False, None),
+        (("CATA_479t",), 4, "飞龙机动", _apply_flight_maneuvers_summon_only, False, None),
+        (("CATA_479t2",), 4, "飞龙机动", _apply_flight_maneuvers_buff_only, False, None),
         (("SW_441",), 1, "纳鲁碎片", _apply_shard_of_naaru, False, None),
         (("SCH_235",), 1, "衰变飞弹", _apply_devolving_missiles, True, None),
         (("CATA_EVENT_402",), 3, "致命贿赂", _apply_deadly_bribe, False, None),

@@ -496,7 +496,7 @@ def _register_p0_aoe() -> None:
         # (card_ids, cost, name, apply_fn, uses_random, cost_fn?)
         (("EX1_129",), 2, "刀扇", _enemy_minions_aoe(1), False, None),
         (("CATA_156",), 6, "试验演示", _apply_experimental_animation, False, None),
-        (("VAC_323",), 1, "麦芽岩浆", _apply_malted_magma, False, None),
+        (("VAC_323",), 2, "麦芽岩浆", _apply_malted_magma, False, None),
         (("VAC_323t", "VAC_323t1"), 2, "麦芽岩浆", _apply_malted_magma, False, None),
         (("VAC_323t2",), 2, "麦芽岩浆", _apply_malted_magma, False, None),
         (("RLK_709",), 4, "冷酷严冬", _all_enemies_aoe(2), False, None),

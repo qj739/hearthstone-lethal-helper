@@ -282,6 +282,8 @@ _RUSH_OVERRIDES = {
     "BT_156": (2, "被禁锢的邪犬", _apply_imprisoned_vilefiend),
     "TIME_063": (3, "时光之主诺兹多姆", _apply_timelord_nozdormu),
     "TOY_516": (3, "折价区海盗", _apply_bargain_bin_buccaneer),
+    # 残骸代费突袭；可能由黑暗之赐生成，未必在当季竞技场突袭清单里
+    "TLC_436": (5, "重生的翼手龙", _apply_default_rush_minion),
 }
 
 _RANDOM_RUSH_IDS = frozenset({"WW_418"})

@@ -200,6 +200,10 @@ END_TURN_BY_CARD: Dict[str, EndTurnDef] = {
     "EDR_810t": EndTurnDef(
         EtKind.ATTACK_LOWEST_ENEMY, amount=1, name="饱胀水蛭",
     ),
+    # 2费衍生：回合结束对所有敌人造成 2 点伤害（含英雄）
+    "DEEP_999t2": EndTurnDef(
+        EtKind.ALL_ENEMIES_DAMAGE, amount=2, name="深岩之洲晶簇",
+    ),
 }
 
 
@@ -741,6 +745,8 @@ def _apply_end_turn_def(
     *,
     rng: Optional[random.Random] = None,
     hero_health: Optional[int] = None,
+    game_state: Optional["GameState"] = None,
+    player_id: Optional[int] = None,
 ) -> int:
     if defn.kind == EtKind.HERO_DAMAGE:
         return apply_divine_shield_to_hits([defn.amount], defender_shield)
@@ -849,10 +855,14 @@ def end_turn_face_damage(
             shots = 2
         face = 0
         for _ in range(shots):
-            face += _apply_end_turn_def(
+            hit = _apply_end_turn_def(
                 apply_defn, entity, enemy_board, defender_shield, rng=rng,
                 hero_health=hero_health,
+                game_state=game_state, player_id=player_id,
             )
+            face += hit
+            if hit > 0 and hero_health is not None:
+                hero_health = max(0, int(hero_health) - hit)
         total += face
         if face > 0:
             notes.append(f"回合结束:{defn.name or entity.card_id}+{face}")

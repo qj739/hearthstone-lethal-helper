@@ -6,7 +6,7 @@ import random
 from copy import deepcopy
 from typing import List, Optional
 
-from .combat_sim import project_board_face_after_spell
+from .combat_sim import apply_single_attack, project_board_face_after_spell
 from .end_turn_board import (
     EtKind,
     RED_CARD_FRIENDLY_WAKE_BENEFIT_IDS,
@@ -17,7 +17,10 @@ from .spell_board import (
     scaled_spell_damage as _sd,
     BoardSpellDef,
     SpellApplyResult,
+    _add_temp_hero_attack,
+    herald_summon_azshara_soldier,
     _apply_best_minion_damage,
+    _apply_damage,
     _apply_damage_to_unit,
     _apply_direct_face,
     _apply_lowest_enemy_hits,
@@ -33,6 +36,7 @@ from .spell_board import (
     _steal_enemy_minion_to_fighter,
     _summon_friendly_fighter,
     player_corpses,
+    spell_script_damage,
     apply_divine_shield_to_hits,
 )
 
@@ -183,6 +187,67 @@ def _apply_tooth_of_nefarian(taunts, fighters, *, mult, enemy_shield, spell_powe
     return _apply_optimal_single_target_damage(
         taunts, fighters, _sd(3, mult=mult, spell_power=spell_power), enemy_shield=enemy_shield,
     )
+
+
+def _apply_emergency_surgery(taunts, fighters, *, mult, enemy_shield, **_kw) -> SpellApplyResult:
+    """紧急手术：选择一个敌方随从，召唤四个 3/1 吸血亡灵攻击它。
+
+    目标死亡后仍尽量召唤剩余 token，但不再攻击其他随从（不能因此打脸）。
+    """
+    enemies = [t for t in taunts if int(t.get("health", 0) or 0) > 0]
+    if not enemies:
+        return SpellApplyResult()
+    n = 4 * max(int(mult), 1)
+    ordered = [t for t in enemies if t.get("taunt")] + [t for t in enemies if not t.get("taunt")]
+    best_face = -1
+    best_ts = None
+    best_fs = None
+    for src in ordered:
+        ts = deepcopy(taunts)
+        fs = deepcopy(fighters)
+        tgt = None
+        src_id = src.get("entity_id")
+        if src_id is not None:
+            for t in ts:
+                if t.get("entity_id") == src_id:
+                    tgt = t
+                    break
+        if tgt is None:
+            for t in ts:
+                if (
+                    t.get("health") == src.get("health")
+                    and t.get("atk") == src.get("atk")
+                    and bool(t.get("taunt")) == bool(src.get("taunt"))
+                ):
+                    tgt = t
+                    break
+        if tgt is None:
+            continue
+        tgt.setdefault("shield", False)
+        for _ in range(n):
+            before = len(fs)
+            _summon_friendly_fighter(
+                fs, 3, 1, lifesteal=True, card_id="JAIL_454t",
+            )
+            if len(fs) == before:
+                break
+            token = fs[-1]
+            token["can_face"] = False
+            if int(tgt.get("health", 0) or 0) > 0:
+                token["attacks_left"] = 1
+                apply_single_attack(token, tgt)
+            else:
+                token["attacks_left"] = 0
+        _remove_dead_taunts(ts)
+        face = project_board_face_after_spell(ts, fs, enemy_shield) or 0
+        if face > best_face:
+            best_face = face
+            best_ts, best_fs = ts, fs
+    if best_ts is None:
+        return SpellApplyResult()
+    taunts[:] = best_ts
+    fighters[:] = best_fs
+    return SpellApplyResult()
 
 
 def _apply_infested_breath(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw,) -> SpellApplyResult:
@@ -842,6 +907,117 @@ def _apply_mass_production(
     return SpellApplyResult(self_hero_damage=dmg)
 
 
+def _apply_grace_of_greatwolf(
+    taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw,
+) -> SpellApplyResult:
+    """巨狼的恩赐：抉择 — 对敌方英雄 4 伤 vs 两只 3/2 突袭狼。"""
+    dmg = _sd(4, mult=mult, spell_power=spell_power)
+    ts_f = deepcopy(taunts)
+    fs_f = deepcopy(fighters)
+    face_res = _apply_direct_face(dmg, enemy_shield)
+    board_shield = False if face_res.broke_enemy_hero_shield else enemy_shield
+    face_score = (face_res.direct_face_damage or 0) + (
+        project_board_face_after_spell(ts_f, fs_f, board_shield) or 0
+    )
+
+    ts_s = deepcopy(taunts)
+    fs_s = deepcopy(fighters)
+    for _ in range(2 * max(int(mult), 1)):
+        _summon_friendly_fighter(fs_s, 3, 2, rush=True)
+    summon_score = project_board_face_after_spell(ts_s, fs_s, enemy_shield) or 0
+
+    if face_score >= summon_score:
+        return _apply_direct_face(dmg, enemy_shield)
+    for _ in range(2 * max(int(mult), 1)):
+        _summon_friendly_fighter(fighters, 3, 2, rush=True)
+    return SpellApplyResult()
+
+
+def _apply_secret_ingredient(
+    taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw,
+) -> SpellApplyResult:
+    """秘制配料：抉择取英雄本回合 +2 攻（忽略随机获取德鲁伊牌）。"""
+    del taunts, enemy_shield, spell_power
+    _add_temp_hero_attack(fighters, 2 * max(int(mult), 1))
+    return SpellApplyResult()
+
+
+def _apply_fel_infusion(
+    taunts, fighters, *, mult, enemy_shield, spell_power=0,
+    gs=None, player_id=None, **_kw,
+) -> SpellApplyResult:
+    """邪能灌魔：兆示艾萨拉士兵（英雄加攻）+ 本回合英雄吸血。"""
+    del taunts, enemy_shield, spell_power
+    herald_summon_azshara_soldier(
+        fighters, mult=mult, gs=gs, player_id=player_id,
+    )
+    for unit in fighters:
+        if unit.get("kind") in ("hero", "weapon") and int(unit.get("attacks_left", 0) or 0) > 0:
+            unit["lifesteal"] = True
+    return SpellApplyResult()
+
+
+def _apply_bursting_leyline(
+    taunts, fighters, *, mult, enemy_shield, spell_power=0,
+    card=None, rng=None, **_kw,
+) -> SpellApplyResult:
+    """迸发魔网：随机敌方随从 N 伤，溢出打脸；次数取脚本（默认 1）。法强无效。"""
+    del spell_power
+    from .combat_sim import unit_is_dormant
+
+    tags = getattr(card, "tags", None) or {}
+    dmg = max(1, spell_script_damage(card, default=4)) * max(int(mult), 1)
+    hits = int(tags.get("TAG_SCRIPT_DATA_NUM_2", 1) or 1)
+    if hits <= 0:
+        hits = 1
+
+    total = SpellApplyResult()
+    shield = enemy_shield
+    # MC 传入 rng；无 rng 时取最大溢出（乐观上界）
+    use_random = rng is not None
+    roll = _rng(rng) if use_random else None
+
+    for _ in range(hits):
+        living = [
+            t for t in taunts
+            if t.get("health", 0) > 0
+            and t.get("kind") != "hero"
+            and not unit_is_dormant(t)
+            and not t.get("spell_immune")
+        ]
+        if not living:
+            face = apply_divine_shield_to_hits([dmg], shield)
+            total.direct_face_damage += face
+            if shield and dmg > 0:
+                total.broke_enemy_hero_shield = True
+                shield = False
+            continue
+
+        if use_random:
+            target = roll.choice(living)
+        else:
+            # 乐观：选溢出最大的目标
+            target = max(
+                living,
+                key=lambda u: max(0, dmg - max(0, int(u.get("health", 0) or 0))),
+            )
+
+        if target.get("shield"):
+            target["shield"] = False
+            continue
+        hp = max(0, int(target.get("health", 0) or 0))
+        overflow = max(0, dmg - hp)
+        _apply_damage(target, dmg, taunts=taunts, fighters=fighters)
+        if overflow > 0:
+            face = apply_divine_shield_to_hits([overflow], shield)
+            total.direct_face_damage += face
+            if shield and overflow > 0:
+                total.broke_enemy_hero_shield = True
+                shield = False
+        _remove_dead_taunts(taunts)
+    return total
+
+
 def _register_p0_other() -> None:
     specs = [
         (("GIFT_10", "CORE_GIFT_10"), 1, "玛法里奥的礼物", _apply_malfurions_gift, False),
@@ -849,6 +1025,7 @@ def _register_p0_other() -> None:
         (("OG_047", "CORE_OG_047"), 3, "野性之心", _apply_feral_rage, False),
         (("ONY_032",), 2, "奈法利安的牙", _apply_tooth_of_nefarian, False),
         (("EDR_814",), 2, "感染吐息", _apply_infested_breath, False),
+        (("JAIL_454",), 5, "紧急手术", _apply_emergency_surgery, False),
         (("EDR_817",), 5, "血腥感染", _apply_blood_treant_infection, False),
         (("WW_006",), 2, "飞镖投掷", _apply_dart_throw, True),
         (("TLC_902",), 2, "虫害侵扰", _apply_infestation, False),
@@ -872,6 +1049,10 @@ def _register_p0_other() -> None:
         (("MIS_707",), 1, "批量生产", _apply_mass_production, False),
         (("EDR_461",), 5, "新月仪式", _apply_lunar_ritual, False),
         (("EDR_461t",), 5, "满月仪式", _apply_lunar_ritual, False),
+        (("EDR_263",), 4, "巨狼的恩赐", _apply_grace_of_greatwolf, False),
+        (("JAIL_201",), 0, "秘制配料", _apply_secret_ingredient, False),
+        (("CATA_530",), 2, "邪能灌魔", _apply_fel_infusion, False),
+        (("MEND_500",), 4, "迸发魔网", _apply_bursting_leyline, True),
     ]
     for card_ids, cost, name, fn, uses_random in specs:
         _register(

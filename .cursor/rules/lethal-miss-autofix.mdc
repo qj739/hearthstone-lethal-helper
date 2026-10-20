@@ -1,0 +1,17 @@
+---
+description: 检测到 lethal_misses 漏斩报告时自动回放诊断并修复斩杀识别
+alwaysApply: true
+---
+
+# 漏斩杀自动修复
+
+当仓库根目录（或打包用户数据目录）存在 `lethal_misses/PENDING.md`，或 `lethal_misses/miss_*.json` 的 `status` 为 `pending` 时：
+
+1. 先运行 `python tools/process_lethal_misses.py` 列出待办。
+2. 读取对应 `miss_*.json` 与 `game_*.log`。
+3. 回放到斩杀前（SendOption / 击杀前）用 `LethalChecker` 复现 `has_lethal=False`。
+4. 修根因（注册缺失、嘲讽抑制、回合末穿透、法术链等），补最小回归测试。
+5. 验证通过后把该 `miss_*.json` 的 `status` 改为 `fixed`，并更新或清空 `PENDING.md`。
+6. 不要提交 unless 用户明确要求；修复后提示用户重启客户端。
+
+优先处理最新一份 pending 报告。不要把投降局当漏斩。

@@ -28,6 +28,10 @@ PRE_PLAY_ATTACK_INTERLEAVE_IDS: Set[str] = (
 ATTACK_INTERLEAVE_BATTLECRY_IDS: Set[str] = (
     FACELESS_CORRUPTOR_IDS | PRE_PLAY_ATTACK_INTERLEAVE_IDS
 )
+# 仅上场带光环/法强、不改敌方：不阻断法术穿插
+NONCONFLICT_BATTLECRY_IDS: Set[str] = frozenset({
+    "END_031",  # 时光之末的阴影：法术伤害+1
+})
 
 # --- 法术（用户整理清单）---
 ATTACK_INTERLEAVE_LOCATION_IDS: Set[str] = frozenset({
@@ -56,6 +60,10 @@ ATTACK_INTERLEAVE_SPELL_IDS: Set[str] = frozenset({
     "DMF_117t2",
     "REV_239",      # 窒息暗影
     "DREAM_02",     # 伊瑟拉苏醒
+    "VAC_323",      # 麦芽岩浆：先换嘲再连喝清复生嘲讽
+    "VAC_323t",
+    "VAC_323t1",
+    "VAC_323t2",
 })
 
 # 法术之间插入换嘲：前缀法术后用随从解嘲，再施放后缀（使随机消灭变为必中等）
@@ -70,6 +78,10 @@ MID_ATTACK_INTERLEAVE_SPELL_IDS: Set[str] = frozenset({
     "TTN_932",      # 混乱吞噬
     "TIME_712",     # 诛灭暴君
     "CORE_RLK_087", # 窒息
+    "VAC_323",      # 麦芽岩浆：法强随从后先换嘲再连喝
+    "VAC_323t",
+    "VAC_323t1",
+    "VAC_323t2",
 })
 
 INTERLEAVE_SPELL_NAMES: Dict[str, str] = {
@@ -165,6 +177,8 @@ def sequence_has_conflicting_battlecry(sequence) -> bool:
         if (
             cid in ATTACK_INTERLEAVE_BATTLECRY_IDS
             or base in ATTACK_INTERLEAVE_BATTLECRY_IDS
+            or cid in NONCONFLICT_BATTLECRY_IDS
+            or base in NONCONFLICT_BATTLECRY_IDS
         ):
             continue
         return True
@@ -187,9 +201,14 @@ def sequence_needs_attack_interleave(sequence) -> bool:
     has_pre_play = False
     for defn, _, card in sequence:
         cid = step_card_id(defn, card)
+        base = cid[5:] if cid.startswith("CORE_") else cid
         if cid in PRE_PLAY_ATTACK_INTERLEAVE_IDS:
             has_pre_play = True
-        elif get_battlecry_def(cid) is not None:
+        elif (
+            get_battlecry_def(cid) is not None
+            and cid not in NONCONFLICT_BATTLECRY_IDS
+            and base not in NONCONFLICT_BATTLECRY_IDS
+        ):
             return False
     if has_pre_play:
         return True

@@ -291,6 +291,7 @@ class Overlay:
     THEME_NORMAL = "normal"
     THEME_MY_LETHAL = "my_lethal"
     THEME_OPP_LETHAL = "opp_lethal"
+    THEME_MISS = "miss_lethal"  # 漏斩提示：紫底
     THEME_DARK = "dark"
     THEME_LIGHT = "light"
     THEME_TRANSPARENT = "transparent"
@@ -300,6 +301,8 @@ class Overlay:
         THEME_MY_LETHAL: {"bg": (210, 45, 45), "fg": (255, 255, 255)},
         # 敌方斩杀：蓝底白字，与我方红底区分
         THEME_OPP_LETHAL: {"bg": (35, 110, 220), "fg": (255, 255, 255)},
+        # 漏斩自检：紫底白字，与斩杀红底区分
+        THEME_MISS: {"bg": (118, 52, 180), "fg": (255, 255, 255)},
         THEME_DARK: {"bg": (28, 32, 38), "fg": (230, 235, 240)},
         THEME_LIGHT: {"bg": (248, 249, 251), "fg": (24, 28, 32)},
         THEME_TRANSPARENT: {"bg": (18, 20, 24), "fg": (220, 225, 230)},
@@ -342,7 +345,7 @@ class Overlay:
         if custom_colors:
             return custom_colors["bg"], custom_colors["fg"]
         active = theme if hs_detected else self._base_theme
-        if active in (self.THEME_MY_LETHAL, self.THEME_OPP_LETHAL):
+        if active in (self.THEME_MY_LETHAL, self.THEME_OPP_LETHAL, self.THEME_MISS):
             colors = self._THEMES[active]
             return colors["bg"], colors["fg"]
         if active == self.THEME_NORMAL:
@@ -1301,7 +1304,12 @@ class Overlay:
         with self._text_lock:
             self._text = text
             if theme is not None:
-                if theme in (self.THEME_NORMAL, self.THEME_MY_LETHAL, self.THEME_OPP_LETHAL):
+                if theme in (
+                    self.THEME_NORMAL,
+                    self.THEME_MY_LETHAL,
+                    self.THEME_OPP_LETHAL,
+                    self.THEME_MISS,
+                ):
                     self._theme = theme
                 elif theme in self._THEMES:
                     self._theme = theme

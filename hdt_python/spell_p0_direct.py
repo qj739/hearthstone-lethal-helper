@@ -167,6 +167,13 @@ def _apply_arcane_shot(taunts, fighters, *, mult, enemy_shield, spell_power=0, *
     )
 
 
+def _apply_lightning_bolt(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw) -> SpellApplyResult:
+    """闪电箭：对一个敌人造成 3 点伤害（可打脸）。过载不影响本回合斩杀。"""
+    return _apply_optimal_single_target_damage(
+        taunts, fighters, _sd(3, mult=mult, spell_power=spell_power), enemy_shield=enemy_shield,
+    )
+
+
 def _apply_stone(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw) -> SpellApplyResult:
     """石头 WW_001t（狗头人矿工发掘衍生）：对一个敌人造成 3 点伤害。"""
     return _apply_optimal_single_target_damage(
@@ -174,7 +181,21 @@ def _apply_stone(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw) 
     )
 
 
+def _apply_bury_and_reap(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw) -> SpellApplyResult:
+    """自埋自收 WW_352：造成 3 点伤害（可打脸）。发掘宝藏不计入本回合斩杀。"""
+    return _apply_optimal_single_target_damage(
+        taunts, fighters, _sd(3, mult=mult, spell_power=spell_power), enemy_shield=enemy_shield,
+    )
+
+
 def _apply_fireball(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw) -> SpellApplyResult:
+    return _apply_optimal_single_target_damage(
+        taunts, fighters, _sd(6, mult=mult, spell_power=spell_power), enemy_shield=enemy_shield,
+    )
+
+
+def _apply_chaotic_tendril(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw) -> SpellApplyResult:
+    """混乱化形 DEEP_031：造成 6 点伤害（可打脸）。随机 6 费随从本回合不能攻击，牌库底摧毁不计。"""
     return _apply_optimal_single_target_damage(
         taunts, fighters, _sd(6, mult=mult, spell_power=spell_power), enemy_shield=enemy_shield,
     )
@@ -298,6 +319,16 @@ def _apply_renewing_flames(taunts, fighters, *, mult, enemy_shield, spell_power=
     return _apply_lowest_enemy_hits(
         taunts, fighters, _sd(5, mult=mult, spell_power=spell_power), hits=2,
         enemy_shield=enemy_shield, self_lifesteal=True, rng=rng, **_kw,
+    )
+
+
+def _apply_sludge_barrel(
+    taunts, fighters, *, mult, enemy_shield, spell_power=0, rng=None, **_kw,
+) -> SpellApplyResult:
+    """淤泥桶 WW_044t：对生命值最低的敌人造成 4 点伤害。"""
+    return _apply_lowest_enemy_hits(
+        taunts, fighters, _sd(4, mult=mult, spell_power=spell_power), hits=1,
+        enemy_shield=enemy_shield, rng=rng, **_kw,
     )
 
 
@@ -536,6 +567,68 @@ def _apply_climactic_necrotic_explosion(
     return res
 
 
+def _apply_optimal_once_or_twice(
+    taunts, fighters, damage: int, *, enemy_shield: bool,
+    card=None, combo_active=False, gs=None, player_id=None,
+) -> SpellApplyResult:
+    """任意目标直伤；亮边（锻造/流放）时再施放一次。"""
+    shield = enemy_shield
+    res = _apply_optimal_single_target_damage(
+        taunts, fighters, damage, enemy_shield=shield,
+    )
+    if res.broke_enemy_hero_shield:
+        shield = False
+    if hand_effect_active(
+        card, combo_active=combo_active, gs=gs, player_id=player_id,
+    ):
+        extra = _apply_optimal_single_target_damage(
+            taunts, fighters, damage, enemy_shield=shield,
+        )
+        res.direct_face_damage += extra.direct_face_damage
+        res.opponent_lifesteal_heal += extra.opponent_lifesteal_heal
+        if extra.broke_enemy_hero_shield:
+            res.broke_enemy_hero_shield = True
+    return res
+
+
+def _apply_molten_gold(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw) -> SpellApplyResult:
+    """熔炼黄金：4 伤任意目标（变形进度忽略）。"""
+    return _apply_optimal_single_target_damage(
+        taunts, fighters, _sd(4, mult=mult, spell_power=spell_power), enemy_shield=enemy_shield,
+    )
+
+
+def _apply_cryosleep(taunts, fighters, *, mult, enemy_shield, spell_power=0, **_kw) -> SpellApplyResult:
+    """封冻沉眠：4 伤任意目标（抽牌/延系再抽忽略）。"""
+    return _apply_optimal_single_target_damage(
+        taunts, fighters, _sd(4, mult=mult, spell_power=spell_power), enemy_shield=enemy_shield,
+    )
+
+
+def _apply_molten_rune(
+    taunts, fighters, *, mult, enemy_shield, spell_power=0,
+    card=None, combo_active=False, gs=None, player_id=None, **_kw,
+) -> SpellApplyResult:
+    """熔火符文：3 伤；锻造亮边再施一次。"""
+    return _apply_optimal_once_or_twice(
+        taunts, fighters, _sd(3, mult=mult, spell_power=spell_power),
+        enemy_shield=enemy_shield, card=card, combo_active=combo_active,
+        gs=gs, player_id=player_id,
+    )
+
+
+def _apply_cosmic_manifestations(
+    taunts, fighters, *, mult, enemy_shield, spell_power=0,
+    card=None, combo_active=False, gs=None, player_id=None, **_kw,
+) -> SpellApplyResult:
+    """宇宙具象：2 伤；流放亮边再施一次（洗牌忽略）。"""
+    return _apply_optimal_once_or_twice(
+        taunts, fighters, _sd(2, mult=mult, spell_power=spell_power),
+        enemy_shield=enemy_shield, card=card, combo_active=combo_active,
+        gs=gs, player_id=player_id,
+    )
+
+
 def _register_p0_direct() -> None:
     specs: List[tuple] = [
         (("CATA_785",), 2, "暮光祭礼", _apply_rite_twilight, False),
@@ -558,8 +651,11 @@ def _register_p0_direct() -> None:
         (("CATA_303",), 2, "净化吐息", _apply_purifying_breath, False),
         (("TIME_611",), 2, "时间停滞", _apply_timestop, False),
         (("DS1_185", "CORE_DS1_185"), 1, "奥术射击", _apply_arcane_shot, False),
+        (("EX1_238", "CORE_EX1_238"), 1, "闪电箭", _apply_lightning_bolt, False),
         (("WW_001t",), 1, "石头", _apply_stone, False),
+        (("WW_352",), 3, "自埋自收", _apply_bury_and_reap, False),
         (("CS2_029", "CORE_CS2_029"), 4, "火球术", _apply_fireball, False),
+        (("DEEP_031",), 6, "混乱化形", _apply_chaotic_tendril, False),
         (("JAIL_941t",), 2, "黑暗之拥", _apply_dark_embrace, False),
         (("JAIL_941",), 2, "神圣之拥", _apply_holy_embrace, False),
         (("CS2_012", "CORE_CS2_012"), 3, "横扫", _apply_swipe, False),
@@ -574,6 +670,14 @@ def _register_p0_direct() -> None:
         (("REV_601", "REV_601t", "CORE_REV_601"), 2, "冰冻之触", _apply_frozen_touch, False),
         (("CATA_464t",), 2, "龙息", _apply_dragon_breath, False),
         (("ETC_210",), 10, "通灵最强音", _apply_climactic_necrotic_explosion, False),
+        (("JAIL_801",), 3, "熔炼黄金", _apply_molten_gold, False),
+        (("TLC_440",), 4, "封冻沉眠", _apply_cryosleep, False),
+        (("TTN_477",), 3, "熔火符文", _apply_molten_rune, False),
+        (("JAIL_892",), 2, "宇宙具象", _apply_cosmic_manifestations, False),
+        # 诚信商家格里伏塔衍生：守卫护符真货（伪劣版仅打随从，见 spell_p0_minion）
+        (("VAC_959t07t",), 1, "守卫护符", _apply_wicked_stab_6, False),
+        # 淤泥桶：使用/弃掉/摧毁时对生命值最低的敌人造成 4 点伤害
+        (("WW_044t",), 3, "淤泥桶", _apply_sludge_barrel, False),
     ]
     for card_ids, cost, name, fn, uses_random in specs:
         _register(

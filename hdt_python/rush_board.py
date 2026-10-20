@@ -26,6 +26,23 @@ def get_rush_def(card_id: str) -> Optional[BoardSpellDef]:
     return BOARD_RUSH.get("CORE_" + card_id)
 
 
+def resolve_rush_def(card_id: str) -> Optional[BoardSpellDef]:
+    """已注册突袭定义；未进表则用默认突袭上场。
+
+    仅应在已确认手牌带 RUSH（或注能影犬等）后调用，避免把任意 card_id 当成突袭。
+    """
+    defn = get_rush_def(card_id)
+    if defn is not None:
+        return defn
+    if not card_id:
+        return None
+    from .rush_p0 import _apply_default_rush_minion
+
+    return BoardSpellDef(
+        (card_id,), 0, card_id, _apply_default_rush_minion,
+    )
+
+
 def hand_rush_minions(
     gs: "GameState", player_id: int, available_mana: int,
 ) -> List[Tuple["Entity", BoardSpellDef, int]]:
@@ -49,7 +66,7 @@ def hand_rush_minions(
             continue
         if get_battlecry_def(cid):
             continue
-        defn = get_rush_def(cid)
+        defn = resolve_rush_def(cid)
         if not defn:
             continue
         cost = hand_minion_cost(card, gs, player_id)

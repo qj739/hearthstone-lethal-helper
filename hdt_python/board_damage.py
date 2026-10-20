@@ -576,7 +576,12 @@ def hand_minion_cost(
     gs: Optional["GameState"] = None,
     player_id: Optional[int] = None,
 ) -> int:
-    """手牌随从打出所需法力。残骸费用（CORPSE_SPENDER）不占法力，够残骸时返回 0。"""
+    """手牌随从打出所需法力。
+
+    仅当牌面「用残骸代替法力」时（CORPSE_SPENDER + CARD_ALTERNATE_COST>0，
+    如 TLC_436 翼手龙）返回 0；够残骸才可打，否则 999。
+    空角恐角龙等仅触发耗残骸的牌也带 CORPSE_SPENDER，但仍占法力，不可误判。
+    """
     base_cost = int(entity.cost) if entity.cost and entity.cost > 0 else 0
     raw_tag = entity.tags.get("COST")
     tag_cost: Optional[int] = None
@@ -615,14 +620,21 @@ def hand_minion_cost(
     elif entity.cost > 0:
         mana_cost = int(entity.cost)
 
-    # 残骸代替法力：COST 数值是残骸数，法力为 0
+    # 残骸代替法力：须同时有 CARD_ALTERNATE_COST（残骸数）；单有 CORPSE_SPENDER 不够
     if int(entity.tags.get("CORPSE_SPENDER", 0) or 0) == 1:
-        corpse_need = mana_cost if mana_cost > 0 else int(entity.tags.get("COST", 0) or 0)
-        if gs is not None and player_id is not None and corpse_need > 0:
-            from .spell_board import player_corpses
-            if player_corpses(gs, player_id) < corpse_need:
-                return 999
-        return 0
+        alt_raw = entity.tags.get("CARD_ALTERNATE_COST")
+        alt_cost = 0
+        if alt_raw is not None:
+            try:
+                alt_cost = int(alt_raw)
+            except (TypeError, ValueError):
+                alt_cost = 0
+        if alt_cost > 0:
+            if gs is not None and player_id is not None:
+                from .spell_board import player_corpses
+                if player_corpses(gs, player_id) < alt_cost:
+                    return 999
+            return 0
     return mana_cost
 
 
@@ -660,13 +672,13 @@ def collect_hand_rush_minions(
     gs: "GameState", player_id: int, available_mana: int,
 ) -> List[Tuple["Entity", int, int]]:
     """可打出的手牌突袭随从：(实体, 费用, 攻击力)。"""
-    from .rush_board import get_rush_def
+    from .rush_board import resolve_rush_def
 
     result: List[Tuple["Entity", int, int]] = []
     for card in gs.get_hand(player_id):
         if not hand_minion_has_rush(card):
             continue
-        if get_rush_def(card.card_id or "") is None:
+        if resolve_rush_def(card.card_id or "") is None:
             continue
         cost = hand_minion_cost(card, gs, player_id)
         if cost > available_mana:
@@ -906,19 +918,15 @@ def _turn_parity_is_players_turn(game_state: "GameState", player_id: int) -> Opt
 
 
 def is_players_turn(game_state: "GameState", player_id: int) -> bool:
-    """当前是否为 player_id 的回合。"""
+    """当前是否为 player_id 的回合。
+
+    优先用 Player 实体 CURRENT_PLAYER / active_player_id。
+    额外回合时 GameEntity.TURN 仍递增，奇偶会与真实行动方冲突，不能压过 CURRENT_PLAYER。
+    """
     from_current = _resolve_current_player_id(game_state)
-    from_parity = _turn_parity_is_players_turn(game_state, player_id)
-
-    if from_current is not None and from_parity is not None:
-        current_says = from_current == player_id
-        if current_says == from_parity:
-            return current_says
-        # CURRENT_PLAYER 可能是 EntityID，与 TURN 冲突时以 HDT 的 TURN 奇偶为准
-        return from_parity
-
     if from_current is not None:
         return from_current == player_id
+    from_parity = _turn_parity_is_players_turn(game_state, player_id)
     if from_parity is not None:
         return from_parity
     return False
@@ -1388,7 +1396,11 @@ class PlayerBoardView:
 
     def face_hit_damages(self) -> List[int]:
         """无嘲讽时每次打脸攻击的伤害列表（用于圣盾模拟）"""
-        from .secret_attack_board import player_has_crusader_aura, stamp_crusader_aura_on_fighter
+        from .secret_attack_board import (
+            player_has_crusader_aura,
+            stamp_crusader_aura_on_fighter,
+            stamp_si7_slayer_on_fighter,
+        )
         from .rush_combat import stamp_fighter_attack_effects, simulate_minion_face_hits
         from .spell_board import entity_is_beast, entity_is_paladin
         from .weapon_p0 import apply_after_attack_friendly_buffs, stamp_equipped_weapon_effects
@@ -1436,6 +1448,7 @@ class PlayerBoardView:
                 "attacks_left": remaining,
                 "can_face": can_hero,
                 "beast": entity_is_beast(card.entity),
+                "stealth": card.entity.tags.get("STEALTH", 0) == 1,
             }
             if entity_is_paladin(card.entity):
                 fighter["paladin"] = True
@@ -1443,6 +1456,7 @@ class PlayerBoardView:
             stamp_fighter_attack_effects(fighter, cid)
             if self.game_state is not None and self.player_id is not None:
                 stamp_crusader_aura_on_fighter(fighter, self.game_state, self.player_id)
+                stamp_si7_slayer_on_fighter(fighter, self.game_state, self.player_id)
             minion_fighters.append(fighter)
 
         if self.hero and self.hero.include:

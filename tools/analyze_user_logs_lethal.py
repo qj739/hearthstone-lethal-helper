@@ -255,26 +255,30 @@ def analyze_split_file(path: Path) -> GameReport:
 
         pk = rep.pre_kill
         ts = rep.kill_turn_start
-        if pk:
+        # 以斩杀回合初为准：避免「打一半才亮」被 pre_kill 判成正确
+        if rep.end_type == "对手投降":
+            rep.final_judge = "— 投降局(未达斩)"
+            rep.note = (ts or pk).note if (ts or pk) else ""
+        elif ts is not None:
+            rep.note = ts.note
+            if ts.lethal:
+                rep.final_judge = "✅ 回合初可识别"
+            elif ts.opp_hp > 0 and ts.overlay >= ts.opp_hp:
+                rep.final_judge = "❌ 回合初场攻够但未判斩"
+            elif pk and pk.lethal:
+                rep.final_judge = "— 中途才成立"
+            elif rep.end_type == "英雄击杀":
+                rep.final_judge = "❌ 漏算斩杀"
+            else:
+                rep.final_judge = "⚠️ 非标准斩杀胜"
+        elif pk is not None:
             rep.note = pk.note
             if pk.lethal:
                 rep.final_judge = "✅ 斩杀前正确"
             elif rep.end_type == "英雄击杀":
                 rep.final_judge = "❌ 漏算斩杀"
-            elif rep.end_type == "对手投降":
-                rep.final_judge = "— 投降局(未达斩)"
             else:
                 rep.final_judge = "⚠️ 未识别"
-        elif ts and ts.lethal:
-            rep.note = ts.note
-            rep.final_judge = "✅ 回合初正确"
-        elif ts and not ts.lethal:
-            if rep.end_type == "英雄击杀":
-                rep.final_judge = "❌ 漏算斩杀"
-            elif rep.end_type == "对手投降":
-                rep.final_judge = "— 投降局(未达斩)"
-            else:
-                rep.final_judge = "⚠️ 非标准斩杀胜"
         else:
             rep.final_judge = "⚠️ 未定位检查点"
         rep.verdict = rep.final_judge

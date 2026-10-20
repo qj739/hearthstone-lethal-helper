@@ -123,7 +123,7 @@ def _apply_dk_ghoul_charge(atk: int, health: int):
         """食尸鬼冲锋：召唤冲锋食尸鬼，当回合可解场/打脸。"""
         _summon_friendly_fighter(
             f, atk, health, charge=True, card_id="HERO_11bpt",
-            from_hero_power=True,
+            from_hero_power=True, undead=True,
         )
         return SpellApplyResult()
 

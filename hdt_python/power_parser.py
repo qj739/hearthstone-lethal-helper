@@ -572,6 +572,8 @@ _PLAYER_MANA_TAGS = frozenset({
     "MAXRESOURCES",
     "CORPSES",
 })
+# 残骸消耗：日志常只涨 CORPSES_SPENT、不减 CORPSES（如吸血鬼之吻），需自行扣减
+_PLAYER_CORPSE_SPENT_TAG = "CORPSES_SPENT_THIS_GAME"
 # 写在 Player 战网名实体上、需同步到 Player 实体（连击、疲劳等）
 _PLAYER_TURN_TAGS = frozenset({
     "NUM_OPTIONS_PLAYED_THIS_TURN",
@@ -622,6 +624,7 @@ class PowerLogParser(LogWatcher):
         self.game_state = game_state
         self.event_handlers: Dict[str, list] = {
             "game_start": [],
+            "match_ending": [],
             "game_end": [],
             "turn_start": [],
             "entity_created": [],
@@ -1204,6 +1207,9 @@ class PowerLogParser(LogWatcher):
                 if hero:
                     self._apply_tag(hero.entity_id, tag, value, controller_from_tag_change=False)
                 return
+            if pid is not None and tag == _PLAYER_CORPSE_SPENT_TAG:
+                self._handle_corpses_spent(pid, value)
+                return
             if pid is not None and tag in _PLAYER_TURN_TAGS:
                 for peid, ppid in self.game_state.player_ids.items():
                     if ppid == pid:
@@ -1225,6 +1231,29 @@ class PowerLogParser(LogWatcher):
         if "#" in name and entity_str.split("#")[0] == name.split("#")[0]:
             return True
         return False
+
+    def _handle_corpses_spent(self, player_id: int, value: str) -> None:
+        """CORPSES_SPENT 增加时同步扣减英雄 CORPSES（Power.log 常漏写 CORPSES 减少）。"""
+        try:
+            new_spent = int(value)
+        except ValueError:
+            return
+        hero = self.game_state.get_hero(player_id)
+        if hero is None:
+            return
+        old_spent = int(hero.tags.get(_PLAYER_CORPSE_SPENT_TAG, 0) or 0)
+        self._apply_tag(
+            hero.entity_id, _PLAYER_CORPSE_SPENT_TAG, str(new_spent),
+            controller_from_tag_change=False,
+        )
+        delta = new_spent - old_spent
+        if delta <= 0:
+            return
+        old_corpses = int(hero.tags.get("CORPSES", 0) or 0)
+        self._apply_tag(
+            hero.entity_id, "CORPSES", str(max(0, old_corpses - delta)),
+            controller_from_tag_change=False,
+        )
 
     def _handle_player_current_player(self, entity_str: str, value: str):
         """Player 实体上的 CURRENT_PLAYER 是 0/1 标志，不是 PlayerID。"""
@@ -1250,17 +1279,10 @@ class PowerLogParser(LogWatcher):
             gs.active_player_id = pid
             return
 
-        # 回合交接：对手 CURRENT_PLAYER 先变 0 时，立即切换 active，避免仍按对方回合显示
+        # 回合交接时 CURRENT_PLAYER 常先被置 0。额外回合是同一玩家 0→1，
+        # 不能猜成对手；等后续 flag=1 再写入 active。
         if flag == 0 and gs.active_player_id == pid:
-            other = None
-            if gs.local_player_id and gs.opponent_player_id:
-                other = (
-                    gs.opponent_player_id
-                    if pid == gs.local_player_id
-                    else gs.local_player_id
-                )
-            if other:
-                gs.active_player_id = other
+            return
 
     def _resolve_player_id_from_name(self, entity_str: str) -> Optional[int]:
         for pid, name in self.game_state.player_names.items():
@@ -1625,6 +1647,8 @@ class PowerLogParser(LogWatcher):
             return
         print("[Power] 🏁 对局结束，清零场面数据")
         self._game_end_emitted = True
+        # 清空前发出：漏斩审计等仍需读 PLAYSTATE / 英雄
+        self.emit("match_ending")
         self.lines_processed = 0
         self.game_state.end_current_game()
         self.emit("game_end")

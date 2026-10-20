@@ -74,7 +74,7 @@ def bench(limit: int, runs: int = 5, warmup: int = 1) -> dict:
     for r in range(warmup + runs):
         gs = build_gs()
         plays = hand_all_board_plays(gs, 1, 10)
-        trimmed = LethalChecker._trim_hand_spells_for_search(plays, 10)
+        trimmed = LethalChecker(gs)._trim_hand_spells_for_search(plays, 10, 1)
         if r == warmup:
             kept = sorted(x[1].name for x in trimmed)
             checker = LethalChecker(gs)
@@ -92,7 +92,7 @@ def bench(limit: int, runs: int = 5, warmup: int = 1) -> dict:
                 player_id=1,
                 opp_taunts=[],
             )
-            trimmed_combo = LethalChecker._trim_hand_spells_for_search(combo_hand, combo_mana)
+            trimmed_combo = checker._trim_hand_spells_for_search(combo_hand, combo_mana, 1)
             seq_count = len(checker._enumerate_spells_for_search(
                 trimmed_combo, combo_mana,
                 enemy_minions=enemy,

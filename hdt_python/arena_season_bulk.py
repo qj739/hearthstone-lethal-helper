@@ -915,6 +915,8 @@ def _ensure_board_modules_loaded() -> None:
     from . import combo_board  # noqa: F401
     from . import most_wanted_p0  # noqa: F401
     most_wanted_p0.register_most_wanted()
+    from . import black_empire_p0  # noqa: F401
+    black_empire_p0.register_black_empire()
 
 
 def register_arena_season_gap() -> List[Tuple[str, str, str, str]]:
